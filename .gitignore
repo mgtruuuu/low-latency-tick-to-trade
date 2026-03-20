@@ -1,0 +1,16 @@
+# Build output
+build/
+build-*/
+
+# clangd cache
+.cache/
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log

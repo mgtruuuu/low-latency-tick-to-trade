@@ -1,0 +1,11 @@
+mk_add_bench(hash_map_bench   hash_map_bench.cpp   mk_ds)
+mk_add_bench(intrusive_list_bench   intrusive_list_bench.cpp   mk_ds)
+mk_add_bench(ring_buffer_bench   ring_buffer_bench.cpp   mk_ds)
+mk_add_bench(timing_wheel_bench   timing_wheel_bench.cpp   mk_ds)
+mk_add_bench(index_free_stack_bench   index_free_stack_bench.cpp   mk_ds)
+
+mk_add_gbench(hash_map_gbench   hash_map_gbench.cpp   mk_ds)
+mk_add_gbench(intrusive_list_gbench   intrusive_list_gbench.cpp   mk_ds)
+mk_add_gbench(ring_buffer_gbench   ring_buffer_gbench.cpp   mk_ds)
+mk_add_gbench(timing_wheel_gbench   timing_wheel_gbench.cpp   mk_ds)
+mk_add_gbench(index_free_stack_gbench   index_free_stack_gbench.cpp   mk_ds)

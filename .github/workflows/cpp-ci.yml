@@ -1,0 +1,89 @@
+name: C++ CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Debug build + full test suite
+  # ---------------------------------------------------------------------------
+  build-and-test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Cache FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: fetchcontent-dev-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: fetchcontent-dev-
+
+      - name: Configure (dev preset)
+        run: cmake --preset dev
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # Job 2: ASan + UBSan — prove memory safety
+  # ---------------------------------------------------------------------------
+  asan-ubsan:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Cache FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: build-asan/_deps
+          key: fetchcontent-asan-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: fetchcontent-asan-
+
+      - name: Configure (dev-asan preset)
+        run: cmake --preset dev-asan
+
+      - name: Build
+        run: cmake --build build-asan -j$(nproc)
+
+      - name: Test (excluding ASan-incompatible death tests)
+        run: ctest --test-dir build-asan --output-on-failure -E "GlobalNewDeleteDeathTest"
+
+  # ---------------------------------------------------------------------------
+  # Job 3: clang-tidy — zero warnings enforced (WarningsAsErrors: '*')
+  # ---------------------------------------------------------------------------
+  clang-tidy:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang and clang-tidy
+        run: sudo apt-get update && sudo apt-get install -y clang clang-tidy
+
+      - name: Cache FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: build-tidy/_deps
+          key: fetchcontent-tidy-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: fetchcontent-tidy-
+
+      - name: Configure (dev-tidy preset)
+        run: cmake --preset dev-tidy
+
+      - name: Build with clang-tidy
+        run: cmake --build build-tidy -j$(nproc)
