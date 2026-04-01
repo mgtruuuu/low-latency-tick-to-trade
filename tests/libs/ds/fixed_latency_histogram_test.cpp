@@ -121,7 +121,7 @@ TEST(FixedLatencyHistogramTest, Percentiles) {
 
   // Put 100 samples in bucket 0 [0,10), 100 in bucket 5 [50,60).
   for (int i = 0; i < 100; ++i) {
-    h.record(5);  // bucket 0
+    h.record(5); // bucket 0
   }
   for (int i = 0; i < 100; ++i) {
     h.record(55); // bucket 5
@@ -261,11 +261,11 @@ TEST(FixedLatencyHistogramTest, PowerOfTwoBucketWidth) {
   // Power-of-two bucket width — compiler should emit right-shift.
   mk::ds::FixedLatencyHistogram<64, 16> h;
 
-  h.record(0);   // bucket 0 (0 >> 4 = 0)
-  h.record(15);  // bucket 0 (15 >> 4 = 0)
-  h.record(16);  // bucket 1 (16 >> 4 = 1)
-  h.record(31);  // bucket 1 (31 >> 4 = 1)
-  h.record(32);  // bucket 2 (32 >> 4 = 2)
+  h.record(0);  // bucket 0 (0 >> 4 = 0)
+  h.record(15); // bucket 0 (15 >> 4 = 0)
+  h.record(16); // bucket 1 (16 >> 4 = 1)
+  h.record(31); // bucket 1 (31 >> 4 = 1)
+  h.record(32); // bucket 2 (32 >> 4 = 2)
 
   EXPECT_EQ(h.count_at(0), 2U);
   EXPECT_EQ(h.count_at(1), 2U);

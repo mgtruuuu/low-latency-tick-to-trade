@@ -11,6 +11,7 @@ mk_add_bench(arena_allocator_bench                arena_allocator_bench.cpp     
 mk_add_bench(xorshift64_bench                    xorshift64_bench.cpp                    mk_sys)
 mk_add_bench(signal_logger_bench                 signal_logger_bench.cpp                 mk_sys)
 mk_add_bench(async_logger_bench                  async_logger_bench.cpp                  mk_sys)
+target_link_libraries(async_logger_bench PRIVATE mk_app_shared)  # pipeline_log_entry.hpp
 
 mk_add_gbench(object_pool_gbench                    object_pool_gbench.cpp                    mk_sys)
 mk_add_gbench(spsc_queue_gbench                     spsc_queue_gbench.cpp                     mk_sys)

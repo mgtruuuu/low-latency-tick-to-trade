@@ -38,10 +38,10 @@ TEST(FixedIndexFreeStackTest, PopReturnsUniqueIndices) {
 
   std::set<std::uint32_t> seen;
   for (std::size_t i = 0; i < kN; ++i) {
-    auto idx = stack.pop();
-    ASSERT_TRUE(idx.has_value());
-    EXPECT_LT(*idx, kN);                                          // NOLINT(bugprone-unchecked-optional-access)
-    EXPECT_TRUE(seen.insert(*idx).second) << "Duplicate index: " << *idx;  // NOLINT(bugprone-unchecked-optional-access)
+    std::uint32_t idx = 0;
+    ASSERT_TRUE(stack.pop(idx));
+    EXPECT_LT(idx, kN);
+    EXPECT_TRUE(seen.insert(idx).second) << "Duplicate index: " << idx;
   }
 
   EXPECT_TRUE(stack.empty());
@@ -49,14 +49,15 @@ TEST(FixedIndexFreeStackTest, PopReturnsUniqueIndices) {
 }
 
 // =============================================================================
-// 3. Pop from empty returns nullopt
+// 3. Pop from empty returns false
 // =============================================================================
 
-TEST(FixedIndexFreeStackTest, PopFromEmptyReturnsNullopt) {
+TEST(FixedIndexFreeStackTest, PopFromEmptyReturnsFalse) {
   FixedIndexFreeStack<2> stack;
-  (void)stack.pop();
-  (void)stack.pop();
-  EXPECT_EQ(stack.pop(), std::nullopt);
+  std::uint32_t dummy = 0;
+  ASSERT_TRUE(stack.pop(dummy));
+  ASSERT_TRUE(stack.pop(dummy));
+  EXPECT_FALSE(stack.pop(dummy));
   EXPECT_TRUE(stack.empty());
 }
 
@@ -67,11 +68,11 @@ TEST(FixedIndexFreeStackTest, PopFromEmptyReturnsNullopt) {
 TEST(FixedIndexFreeStackTest, PushRecyclesIndex) {
   FixedIndexFreeStack<4> stack;
 
-  auto idx = stack.pop();
-  ASSERT_TRUE(idx.has_value());
+  std::uint32_t idx = 0;
+  ASSERT_TRUE(stack.pop(idx));
   EXPECT_EQ(stack.available(), 3U);
 
-  stack.push(*idx);  // NOLINT(bugprone-unchecked-optional-access)
+  stack.push(idx);
   EXPECT_EQ(stack.available(), 4U);
   EXPECT_TRUE(stack.full());
 }
@@ -84,19 +85,26 @@ TEST(FixedIndexFreeStackTest, LIFOOrdering) {
   FixedIndexFreeStack<8> stack;
 
   // Pop 3 indices.
-  auto a = stack.pop();
-  auto b = stack.pop();
-  auto c = stack.pop();
+  std::uint32_t a = 0;
+  std::uint32_t b = 0;
+  std::uint32_t c = 0;
+  ASSERT_TRUE(stack.pop(a));
+  ASSERT_TRUE(stack.pop(b));
+  ASSERT_TRUE(stack.pop(c));
 
   // Push back in order: a, b, c.
-  stack.push(*a);  // NOLINT(bugprone-unchecked-optional-access)
-  stack.push(*b);  // NOLINT(bugprone-unchecked-optional-access)
-  stack.push(*c);  // NOLINT(bugprone-unchecked-optional-access)
+  stack.push(a);
+  stack.push(b);
+  stack.push(c);
 
   // LIFO: should get c, b, a back.
-  EXPECT_EQ(stack.pop(), c);
-  EXPECT_EQ(stack.pop(), b);
-  EXPECT_EQ(stack.pop(), a);
+  std::uint32_t out = 0;
+  ASSERT_TRUE(stack.pop(out));
+  EXPECT_EQ(out, c);
+  ASSERT_TRUE(stack.pop(out));
+  EXPECT_EQ(out, b);
+  ASSERT_TRUE(stack.pop(out));
+  EXPECT_EQ(out, a);
 }
 
 // =============================================================================
@@ -109,9 +117,9 @@ TEST(FixedIndexFreeStackTest, ExhaustAndRefill) {
 
   std::vector<std::uint32_t> indices;
   for (std::size_t i = 0; i < kN; ++i) {
-    auto idx = stack.pop();
-    ASSERT_TRUE(idx.has_value());
-    indices.push_back(*idx);  // NOLINT(bugprone-unchecked-optional-access)
+    std::uint32_t idx = 0;
+    ASSERT_TRUE(stack.pop(idx));
+    indices.push_back(idx);
   }
   EXPECT_TRUE(stack.empty());
 
@@ -131,12 +139,13 @@ TEST(FixedIndexFreeStackTest, CapacityOne) {
   FixedIndexFreeStack<1> stack;
   EXPECT_EQ(stack.available(), 1U);
 
-  auto idx = stack.pop();
-  ASSERT_TRUE(idx.has_value());
-  EXPECT_EQ(*idx, 0U);  // NOLINT(bugprone-unchecked-optional-access)
+  std::uint32_t idx = 0;
+  ASSERT_TRUE(stack.pop(idx));
+  EXPECT_EQ(idx, 0U);
   EXPECT_TRUE(stack.empty());
 
-  EXPECT_EQ(stack.pop(), std::nullopt);
+  std::uint32_t dummy = 0;
+  EXPECT_FALSE(stack.pop(dummy));
 
   stack.push(0);
   EXPECT_TRUE(stack.full());
@@ -152,6 +161,14 @@ TEST(FixedIndexFreeStackTest, ConstexprConstruction) {
   static_assert(kStack.available() == 4);
   static_assert(kStack.full());
   static_assert(!kStack.empty());
+
+  // Verify pop() remains constexpr after the out-param API change.
+  constexpr auto kPopWorks = [] {
+    FixedIndexFreeStack<4> s;
+    std::uint32_t out = 0;
+    return s.pop(out) && out == 0;
+  }();
+  static_assert(kPopWorks);
 }
 
 // =============================================================================
@@ -172,8 +189,9 @@ TEST(FixedIndexFreeStackDeathTest, PushOutOfRangeIndexAborts) {
   EXPECT_DEATH(
       {
         FixedIndexFreeStack<4> stack;
-        (void)stack.pop(); // Make room.
-        stack.push(4);     // idx == Capacity → out of range.
+        std::uint32_t dummy = 0;
+        (void)stack.pop(dummy); // Make room.
+        stack.push(4);          // idx == Capacity → out of range.
       },
       "");
 }
@@ -182,7 +200,8 @@ TEST(FixedIndexFreeStackDeathTest, PushLargeOutOfRangeIndexAborts) {
   EXPECT_DEATH(
       {
         FixedIndexFreeStack<4> stack;
-        (void)stack.pop();
+        std::uint32_t dummy = 0;
+        (void)stack.pop(dummy);
         stack.push(std::numeric_limits<std::uint32_t>::max());
       },
       "");
@@ -196,9 +215,10 @@ TEST(FixedIndexFreeStackDeathTest, DoubleFreeAborts) {
   EXPECT_DEATH(
       {
         FixedIndexFreeStack<4> stack;
-        auto idx = stack.pop();
-        stack.push(*idx);  // NOLINT(bugprone-unchecked-optional-access)
-        stack.push(*idx); // Already returned — double-free.  // NOLINT(bugprone-unchecked-optional-access)
+        std::uint32_t idx = 0;
+        (void)stack.pop(idx);
+        stack.push(idx);
+        stack.push(idx); // Already returned — double-free.
       },
       "");
 }
@@ -207,9 +227,10 @@ TEST(FixedIndexFreeStackDeathTest, PushNeverPoppedIndexAborts) {
   EXPECT_DEATH(
       {
         FixedIndexFreeStack<4> stack;
-        auto popped = stack.pop(); // Make room.
+        std::uint32_t popped = 0;
+        (void)stack.pop(popped); // Make room.
         // Push a different valid index that was never popped.
-        const std::uint32_t other = (*popped + 1) % 4;  // NOLINT(bugprone-unchecked-optional-access)
+        const std::uint32_t other = (popped + 1) % 4;
         stack.push(other);
       },
       "");

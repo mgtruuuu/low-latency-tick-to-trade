@@ -355,7 +355,8 @@ TEST(ObjectPoolMmapRegion, ConstructsWithCallerProvidedRegion) {
       size_in_bytes, mk::sys::memory::PrefaultPolicy::kPopulateWrite);
   ASSERT_TRUE(region.has_value()) << "Failed to allocate MmapRegion";
 
-  PoolType pool(std::move(*region), kCap);         // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  PoolType pool(std::move(*region), kCap);
   EXPECT_EQ(kCap, pool.capacity());
 
   // Verify basic allocate/deallocate works
@@ -377,7 +378,8 @@ TEST(ObjectPoolMmapRegion, ExhaustsAndRecyclesWithExternalRegion) {
       size_in_bytes, mk::sys::memory::PrefaultPolicy::kPopulateWrite);
   ASSERT_TRUE(region.has_value());
 
-  PoolType pool(std::move(*region), kCap);         // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  PoolType pool(std::move(*region), kCap);
 
   // Exhaust all objects
   std::vector<Order *> allocated;

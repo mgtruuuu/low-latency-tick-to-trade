@@ -21,7 +21,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
-#include <optional>
 
 namespace mk::ds {
 
@@ -53,23 +52,24 @@ public:
     }
   }
 
-  /// Pop the next available index. Returns nullopt if empty.
-  [[nodiscard]] constexpr std::optional<std::uint32_t> pop() noexcept {
+  /// Pop the next available index into `out`. Returns false if empty.
+  /// Same pattern as SPSCQueue::try_pop() — no std::optional on the hot path.
+  [[nodiscard]] constexpr bool pop(std::uint32_t &out) noexcept {
     if (top_ == 0) [[unlikely]] {
-      return std::nullopt;
+      return false;
     }
-    auto idx = indices_[--top_];
+    out = indices_[--top_];
 #ifndef NDEBUG
-    in_use_[idx] = true;
+    in_use_[out] = true;
 #endif
-    return idx;
+    return true;
   }
 
   /// Return an index to the pool.
   /// Aborts if idx >= Capacity or the stack is already full (push without
   /// a prior pop). These are unrecoverable programmer errors — a corrupt
   /// pool would silently produce invalid indices that cause OOB writes
-  /// in the owning data structure. Unlike pop() (graceful nullopt), there
+  /// in the owning data structure. Unlike pop() (graceful false), there
   /// is no meaningful recovery from a bad push.
   /// In Debug builds, additionally aborts on double-free (pushing an index
   /// that is already in the pool) or push-without-pop (pushing an index

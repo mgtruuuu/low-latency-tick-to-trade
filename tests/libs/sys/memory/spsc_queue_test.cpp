@@ -46,7 +46,7 @@ protected:
   using Queue = mk::sys::memory::SPSCQueue<std::uint64_t>;
 
   alignas(64) std::uint64_t buf_[8]{};
-  Queue q_{buf_, 8};
+  Queue q_{buf_, sizeof(buf_), 8};
 };
 
 // ============================================================================
@@ -143,7 +143,7 @@ TEST(SPSCQueueNonOwning, ExternalBufferWorks) {
   constexpr std::uint32_t kCap = 8;
   alignas(64) std::uint64_t storage[kCap]{};
 
-  Queue q(storage, kCap);
+  Queue q(storage, sizeof(storage), kCap);
 
   for (std::uint64_t i = 0; i < kCap; ++i) {
     ASSERT_TRUE(q.try_push(i + 100));
@@ -205,13 +205,13 @@ TEST(SPSCQueueFactory, CreateNonOwningValidInput) {
   using Queue = mk::sys::memory::SPSCQueue<std::uint64_t>;
   alignas(64) std::uint64_t storage[8]{};
 
-  auto q = Queue::create(storage, 8);
+  auto q = Queue::create(storage, sizeof(storage), 8);
   ASSERT_TRUE(q.has_value());
-  EXPECT_EQ(8U, q->capacity());                     // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(8U, q->capacity()); // NOLINT(bugprone-unchecked-optional-access)
 
-  ASSERT_TRUE(q->try_push(77));                     // NOLINT(bugprone-unchecked-optional-access)
+  ASSERT_TRUE(q->try_push(77)); // NOLINT(bugprone-unchecked-optional-access)
   std::uint64_t val = 0;
-  ASSERT_TRUE(q->try_pop(val));                     // NOLINT(bugprone-unchecked-optional-access)
+  ASSERT_TRUE(q->try_pop(val)); // NOLINT(bugprone-unchecked-optional-access)
   EXPECT_EQ(77U, val);
 }
 
@@ -220,14 +220,14 @@ TEST(SPSCQueueFactory, CreateNonOwningRejectsNonPow2) {
   alignas(64) std::uint64_t storage[8]{};
 
   // capacity 7 (not power-of-two) -> nullopt
-  auto bad = Queue::create(storage, 7);
+  auto bad = Queue::create(storage, sizeof(storage), 7);
   EXPECT_FALSE(bad.has_value());
 }
 
 TEST(SPSCQueueFactory, CreateNonOwningRejectsNull) {
   using Queue = mk::sys::memory::SPSCQueue<std::uint64_t>;
 
-  auto bad = Queue::create(nullptr, 8);
+  auto bad = Queue::create(nullptr, 0, 8);
   EXPECT_FALSE(bad.has_value());
 }
 
@@ -274,7 +274,8 @@ TEST(SPSCQueueStress, SingleProducerSingleConsumer) {
   constexpr std::uint64_t kCount = 2'000'000;
   constexpr std::uint32_t kCap = 1024;
   alignas(64) std::uint64_t stress_buf[kCap]{};
-  mk::sys::memory::SPSCQueue<std::uint64_t> q(stress_buf, kCap);
+  mk::sys::memory::SPSCQueue<std::uint64_t> q(stress_buf, sizeof(stress_buf),
+                                              kCap);
 
   std::thread producer([&] {
     for (std::uint64_t i = 0; i < kCount; ++i) {

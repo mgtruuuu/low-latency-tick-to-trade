@@ -22,8 +22,10 @@
 #include "bench_utils.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <vector>
 
 using namespace mk::algo;
 using namespace mk::sys;
@@ -37,7 +39,12 @@ namespace {
 
 // Capacity large enough for 10K operations per benchmark.
 // Total memory: ~1.5MB (order pool + level pool + hash maps) — fits in L3.
-using BenchBook = OrderBook<16384, 1024, 16384, 2048>;
+constexpr OrderBook::Params kBenchParams{
+    .max_orders = 16384,
+    .max_levels = 1024,
+    .order_map_cap = 16384,
+    .level_map_cap = 2048,
+};
 
 constexpr std::size_t kN = 10'000;
 
@@ -54,7 +61,8 @@ std::array<std::uint64_t, kN> g_latencies{};
 //   hash lookup (dup check) + pool pop + hash insert + list push_back.
 // No sorted insertion cost.
 void bench_add_existing_level(const TscCalibration &cal) {
-  BenchBook book;
+  std::vector<std::byte> buf(OrderBook::required_buffer_size(kBenchParams));
+  OrderBook book(buf.data(), buf.size(), kBenchParams);
 
   // Create one level at price 100.
   (void)book.add_order(1, Side::kBid, 100, 10);
@@ -89,7 +97,9 @@ void bench_add_new_level(const TscCalibration &cal) {
   constexpr std::size_t kBatch = 900;
   std::size_t measured = 0;
 
-  BenchBook book;
+  std::vector<std::byte> buf(OrderBook::required_buffer_size(kBenchParams));
+  OrderBook book(buf.data(), buf.size(), kBenchParams);
+
   while (measured < kN) {
     const std::size_t count = std::min(kBatch, kN - measured);
 
@@ -118,7 +128,8 @@ void bench_add_new_level(const TscCalibration &cal) {
 // Cancelled in reverse order (most recent first) — realistic: market makers
 // cancel their newest quote when updating.
 void bench_cancel(const TscCalibration &cal) {
-  BenchBook book;
+  std::vector<std::byte> buf(OrderBook::required_buffer_size(kBenchParams));
+  OrderBook book(buf.data(), buf.size(), kBenchParams);
 
   constexpr std::size_t kLevels = 50;
   for (std::size_t i = 0; i < kN; ++i) {
@@ -144,7 +155,8 @@ void bench_cancel(const TscCalibration &cal) {
 //   hash lookup + field update + level aggregate update.
 // No list manipulation, no level creation/destruction.
 void bench_modify(const TscCalibration &cal) {
-  BenchBook book;
+  std::vector<std::byte> buf(OrderBook::required_buffer_size(kBenchParams));
+  OrderBook book(buf.data(), buf.size(), kBenchParams);
 
   constexpr std::size_t kLevels = 50;
   for (std::size_t i = 0; i < kN; ++i) {
@@ -169,7 +181,8 @@ void bench_modify(const TscCalibration &cal) {
 // Single pointer dereference (front of intrusive list).
 // The fastest operation — baseline for comparison.
 void bench_best_bid(const TscCalibration &cal) {
-  BenchBook book;
+  std::vector<std::byte> buf(OrderBook::required_buffer_size(kBenchParams));
+  OrderBook book(buf.data(), buf.size(), kBenchParams);
 
   for (std::size_t i = 0; i < 100; ++i) {
     (void)book.add_order(static_cast<OrderId>(i + 1), Side::kBid,

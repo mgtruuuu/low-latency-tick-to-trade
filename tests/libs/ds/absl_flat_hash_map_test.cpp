@@ -18,10 +18,8 @@
  */
 
 #include "absl/container/flat_hash_map.h"
-#include "absl/hash/hash.h"
 
 #include "ds/fixed_hash_map.hpp"
-#include "ds/hash_utils.hpp"
 
 #include <gtest/gtest.h>
 
@@ -202,7 +200,8 @@ struct OrderKey {
   // H is the hash state type (an opaque template parameter).
   // H::combine() feeds each field into the hash state in order.
   template <typename H>
-  friend H AbslHashValue(H h, const OrderKey &key) { // NOLINT(readability-identifier-naming)
+  friend H AbslHashValue(H h, // NOLINT(readability-identifier-naming)
+                         const OrderKey &key) {
     return H::combine(std::move(h), key.symbol_id, key.seq_num);
   }
 };
@@ -214,7 +213,8 @@ TEST(AbslFlatHashMapTest, CustomHashWithAbslHash) {
 
   const OrderKey id1{.symbol_id = 1, .seq_num = 1000};
   const OrderKey id2{.symbol_id = 1, .seq_num = 1001};
-  const OrderKey id3{.symbol_id = 2, .seq_num = 1000}; // Same seq_num as id1, different symbol.
+  const OrderKey id3{.symbol_id = 2,
+                     .seq_num = 1000}; // Same seq_num as id1, different symbol.
 
   map[id1] = 99.50;
   map[id2] = 100.25;

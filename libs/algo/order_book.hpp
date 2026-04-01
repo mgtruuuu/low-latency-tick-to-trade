@@ -15,11 +15,24 @@
  *   - Each PriceLevel holds an IntrusiveList<Order> in FIFO order (time
  *     priority within a price level).
  *   - HashMap<OrderId, Order*> for O(1) order lookup (cancel/modify).
- *     MmapRegion-backed (externally managed buffer, not inline std::array).
  *   - HashMap<Price, PriceLevel*>[2] for O(1) price-to-level lookup.
- *     Each side's map is a separate MmapRegion.
- *   - MmapRegion-backed pools (huge page ready, NUMA-aware) for Order and
- *     PriceLevel with free index stacks. Zero allocation on the hot path.
+ *   - Caller-managed buffer for Order/PriceLevel pools, IndexFreeStacks,
+ *     and HashMaps. OrderBook NEVER owns memory — the caller allocates and
+ *     frees the buffer. Use required_buffer_size() to compute allocation
+ *     parameters, then pass a void* buffer to the constructor or create().
+ *
+ * Memory ownership:
+ *   OrderBook follows the non-owning external storage principle used
+ *   throughout this codebase (HashMap, IndexFreeStack, SPSCQueue,
+ *   RingBuffer). The caller supplies a contiguous buffer; OrderBook
+ *   partitions it internally into 7 sub-regions:
+ *     1. Order pool           (max_orders × sizeof(Order))
+ *     2. PriceLevel pool      (max_levels × sizeof(PriceLevel))
+ *     3. Order free stack     (IndexFreeStack buffer)
+ *     4. Level free stack     (IndexFreeStack buffer)
+ *     5. Order HashMap        (order_map_cap slots)
+ *     6. Bid level HashMap    (level_map_cap slots)
+ *     7. Ask level HashMap    (level_map_cap slots)
  *
  * Design:
  *   - Zero allocation, no exceptions — suitable for hot-path use.
@@ -27,6 +40,8 @@
  *   - All operations are noexcept. Failure returns false.
  *   - Order has a back-pointer to its PriceLevel for O(1) cancel without
  *     a second hash lookup.
+ *   - Non-copyable, movable (move uses O(1) swap with IntrusiveList
+ *     sentinel fixup — safe at startup, not during hot-path use).
  *
  * Hot path operations:
  *   - add_order:    O(1) amortized + O(k) for new price level insertion
@@ -48,16 +63,20 @@
 #pragma once
 
 #include "algo/trading_types.hpp"
-#include "ds/fixed_index_free_stack.hpp"
 #include "ds/hash_map.hpp"
+#include "ds/index_free_stack.hpp"
 #include "ds/intrusive_list.hpp"
-#include "sys/memory/mmap_utils.hpp"
+#include "sys/bit_utils.hpp"
+#include "sys/memory/arena_allocator.hpp" // Arena for bind() buffer partitioning
 
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring> // std::memset
 #include <memory>  // std::construct_at, std::destroy_at
-#include <type_traits> // std::is_trivially_default_constructible_v
+#include <optional>
+#include <type_traits>
 
 namespace mk::algo {
 
@@ -90,13 +109,14 @@ struct Order : mk::ds::IntrusiveListHook {
   PriceLevel *level{nullptr}; ///< Back-pointer to owning price level.
 };
 
-// Order lives in MmapRegion-backed storage without explicit placement-new.
-// C++20 implicit-lifetime rules (P0593R6) apply to aggregates: mmap/memset
-// implicitly creates objects of implicit-lifetime type. Order is an aggregate
-// (no user-declared constructors), so the pool can reuse slots without
-// std::construct_at. The default member initializers ({0}, {nullptr}) make
-// Order non-trivially-default-constructible, but it's still an aggregate
-// and thus an implicit-lifetime type.
+// Order lives in caller-managed storage without explicit placement-new.
+// C++20 implicit-lifetime rules (P0593R6) guarantee that malloc/operator new
+// implicitly create objects of implicit-lifetime type. mmap is not in the
+// standard's list; this codebase assumes equivalent behavior on supported
+// toolchains (implementation-defined). Order is an aggregate, so the pool
+// can reuse slots without std::construct_at. The default member initializers
+// ({0}, {nullptr}) make Order non-trivially-default-constructible, but it's
+// still an aggregate and thus an implicit-lifetime type.
 static_assert(std::is_aggregate_v<Order>,
               "Order must be an aggregate for implicit-lifetime pool reuse");
 static_assert(std::is_trivially_destructible_v<Order>,
@@ -110,142 +130,176 @@ static_assert(std::is_trivially_destructible_v<Order>,
 // Contains IntrusiveList<Order> for the FIFO order queue at this price.
 //
 // Non-trivially destructible (IntrusiveList has a destructor that calls
-// clear()). PriceLevels live in MmapRegion-backed storage and are
+// clear()). PriceLevels live in caller-managed storage and are
 // placement-new'd at construction. OrderBook's destructor explicitly
-// calls ~PriceLevel() before MmapRegion unmaps the memory.
+// calls ~PriceLevel() before the caller frees the buffer.
 
 struct PriceLevel : mk::ds::IntrusiveListHook {
   Price price{0};
   Qty total_qty{0};
-  std::uint32_t order_count{0};
   Side side{Side::kBid};
   mk::ds::IntrusiveList<Order> orders; ///< FIFO queue at this price.
 };
 
 // =============================================================================
-// OrderBook — single-instrument limit order book
+// OrderBook — single-instrument limit order book (non-owning)
 // =============================================================================
 
-/// @tparam MaxOrders    Max live orders in the pool (shared across both sides).
-/// @tparam MaxLevels    Max price-level slots in the pool (shared across both
-/// sides).
-/// @tparam OrderMapCap  HashMap capacity for order lookup (one map,
-/// MmapRegion-backed).
-///                      Must be a power of two ≥ 4.
-/// @tparam LevelMapCap  HashMap capacity for each per-side price→level map
-///                      (MmapRegion-backed). Default is 2× MaxLevels to keep
-///                      load factor ≤50% even if all levels land on one side —
-///                      well under the 70% limit, giving short probe chains for
-///                      linear probing.
-template <std::size_t MaxOrders = 65536, std::size_t MaxLevels = 4096,
-          std::size_t OrderMapCap = 65536, std::size_t LevelMapCap = 8192>
 class OrderBook {
-  // Validate template parameters at compile time. HashMap requires
-  // power-of-two capacity >= 4 for correct linear probing (masking).
-  // Runtime abort in HashMap constructor would catch this too, but
-  // static_assert gives a clear error message at instantiation time.
-  static_assert(MaxOrders > 0, "MaxOrders must be > 0");
-  static_assert(MaxLevels > 0, "MaxLevels must be > 0");
-  static_assert(
-      OrderMapCap >= 4 && (OrderMapCap & (OrderMapCap - 1)) == 0,
-      "OrderMapCap must be a power of two >= 4 (HashMap requirement)");
-  static_assert(
-      LevelMapCap >= 4 && (LevelMapCap & (LevelMapCap - 1)) == 0,
-      "LevelMapCap must be a power of two >= 4 (HashMap requirement)");
+  // ---------------------------------------------------------------------------
+  // Data members (HFT convention: layout visible first for cache analysis)
+  // ---------------------------------------------------------------------------
+
+  // Pools — pointers into caller-managed buffer.
+  Order *order_slots_{nullptr};
+  PriceLevel *level_slots_{nullptr};
+
+  // Runtime capacities (for bounds checks in free_order/free_level).
+  std::size_t max_orders_{0};
+  std::size_t max_levels_{0};
+
+  // Free index stacks — non-owning, stored in caller-managed buffer.
+  mk::ds::IndexFreeStack order_free_;
+  mk::ds::IndexFreeStack level_free_;
+
+  // Sorted price ladders.
+  mk::ds::IntrusiveList<PriceLevel> bids_; ///< Descending (best = front).
+  mk::ds::IntrusiveList<PriceLevel> asks_; ///< Ascending (best = front).
+
+  // Lookup maps — HashMap with caller-managed buffers.
+  mk::ds::HashMap<OrderId, Order *> order_map_;
+
+  // Price-to-level lookup: hash map (general-purpose), one per side.
+  //
+  // Alternative used in production for fixed-tick instruments:
+  //   PriceLevel* level_by_tick_[MAX_TICKS];  // direct-indexed array
+  // Convert price to tick index (price / tick_size), then array[tick_idx].
+  // Eliminates hash computation + linear probing entirely — pure O(1) with
+  // zero hash overhead. Requires bounded price range per instrument.
+  //
+  // We use HashMap because this is a general-purpose book (no assumption
+  // about tick size or price range). For a single-instrument production book
+  // with a known tick size, the direct-indexed array is strictly faster.
+  mk::ds::HashMap<Price, PriceLevel *>
+      level_map_[static_cast<int>(Side::kCount)];
 
 public:
-  // Convenience constructor — two-level huge page fallback.
-  // Aborts if memory allocation fails (startup-time use).
-  //
-  // @param pf         Prefault policy (default: kPopulateWrite — zero hot-path
-  // faults).
-  // @param numa_node  NUMA node to bind memory to (-1 = no binding).
-  // @param lock_pages If true, pin pages in RAM via MAP_LOCKED.
-  explicit OrderBook(mk::sys::memory::PrefaultPolicy pf =
-                         mk::sys::memory::PrefaultPolicy::kPopulateWrite,
-                     int numa_node = -1, bool lock_pages = false) noexcept {
+  /// Runtime capacity parameters (replaces former template parameters).
+  struct Params {
+    std::size_t max_orders{65536}; ///< Max live orders in the pool.
+    std::size_t max_levels{4096};  ///< Max price-level slots in the pool.
+    std::size_t order_map_cap{
+        131072}; ///< 2× max_orders for ≤50% load factor (power of 2 >= 4).
+    std::size_t level_map_cap{
+        8192}; ///< 2× max_levels for ≤50% load factor (power of 2 >= 4).
+  };
 
-    using namespace mk::sys::memory;
+  // ===========================================================================
+  // Static helpers
+  // ===========================================================================
 
-    const auto alloc_region = [&](std::size_t bytes) -> MmapRegion {
-      const RegionIntentConfig cfg{
-          .size = bytes, .numa_node = numa_node, .lock_pages = lock_pages};
-      RegionIntent intent = RegionIntent::kHotRw; // Defensive default.
-      switch (pf) {
-      case PrefaultPolicy::kPopulateWrite:
-        intent = RegionIntent::kHotRw;
-        break;
-      case PrefaultPolicy::kPopulateRead:
-        intent = RegionIntent::kReadMostly;
-        break;
-      case PrefaultPolicy::kNone:
-        intent = RegionIntent::kCold;
-        break;
-      case PrefaultPolicy::kManualWrite:
-        intent = RegionIntent::kHotRw; // Manual prefault → degrade to hot R/W.
-        break;
-      case PrefaultPolicy::kManualRead:
-        intent = RegionIntent::kReadMostly; // Manual prefault → degrade to read.
-        break;
-      }
-      return allocate_region(cfg, intent);
-    };
+  /// Compute the required buffer size in bytes for the given params.
+  /// Accounts for alignment padding between sub-regions.
+  [[nodiscard]] static constexpr std::size_t
+  required_buffer_size(const Params &params) noexcept {
+    // Sub-region sizes (partition order matches bind()).
+    const std::size_t order_pool = params.max_orders * sizeof(Order);
+    const std::size_t level_pool = params.max_levels * sizeof(PriceLevel);
+    const std::size_t order_free =
+        mk::ds::IndexFreeStack::required_buffer_size(params.max_orders);
+    const std::size_t level_free =
+        mk::ds::IndexFreeStack::required_buffer_size(params.max_levels);
 
-    // --- Allocate Order pool ---
-    order_memory_ = alloc_region(MaxOrders * sizeof(Order));
-    order_slots_ = static_cast<Order *>(order_memory_.get());  // NOLINT(cppcoreguidelines-prefer-member-initializer)
-
-    // --- Allocate PriceLevel pool ---
-    level_memory_ = alloc_region(MaxLevels * sizeof(PriceLevel));
-    level_slots_ = static_cast<PriceLevel *>(level_memory_.get());  // NOLINT(cppcoreguidelines-prefer-member-initializer)
-
-    // --- Allocate order_map buffer (HashMap, externally backed) ---
     using OrderMap = mk::ds::HashMap<OrderId, Order *>;
-    order_map_memory_ = alloc_region(OrderMap::required_buffer_size(OrderMapCap));
-    order_map_memory_.advise(MADV_RANDOM);
-    order_map_ = OrderMap(order_map_memory_.get(), order_map_memory_.size(),
-                          OrderMapCap);
-
-    // --- Allocate level_map buffers (one per side) ---
     using LevelMap = mk::ds::HashMap<Price, PriceLevel *>;
-    for (int i = 0; i < 2; ++i) {
-      level_map_memory_[i] =
-          alloc_region(LevelMap::required_buffer_size(LevelMapCap));
-      level_map_memory_[i].advise(MADV_RANDOM);
-      level_map_[i] = LevelMap(level_map_memory_[i].get(),
-                               level_map_memory_[i].size(), LevelMapCap);
-    }
+    const std::size_t order_map =
+        OrderMap::required_buffer_size(params.order_map_cap);
+    const std::size_t bid_map =
+        LevelMap::required_buffer_size(params.level_map_cap);
+    const std::size_t ask_map =
+        LevelMap::required_buffer_size(params.level_map_cap);
 
-    // Construct PriceLevels — IntrusiveList sentinel needs proper init
-    // (sentinel_.prev = sentinel_.next = &sentinel_, not nullptr from zeroed
-    // pages). Orders are trivially destructible; zeroed memory is sufficient.
-    for (std::size_t i = 0; i < MaxLevels; ++i) {
-      std::construct_at(&level_slots_[i]);
-    }
+    // Worst-case alignment padding: alignof(max) - 1 per sub-region boundary.
+    // All sub-regions have alignment <= alignof(std::max_align_t) (16 on
+    // x86-64). 6 internal boundaries × 15 = 90 bytes worst case.
+    constexpr std::size_t kMaxPadding = 6 * (alignof(std::max_align_t) - 1);
 
-    // Free stacks are self-initializing (FixedIndexFreeStack constructor fills
-    // [0, N)).
+    return order_pool + level_pool + order_free + level_free + order_map +
+           bid_map + ask_map + kMaxPadding;
   }
 
-  // Non-copyable, non-movable (contains IntrusiveLists and large arrays).
+  // ===========================================================================
+  // Construction
+  // ===========================================================================
+
+  /// Default constructor — empty, unusable (no buffer bound).
+  /// Exists for default-initialized arrays that are later move-assigned.
+  OrderBook() noexcept = default;
+
+  /// Direct constructor — binds to an external buffer, aborts on invalid input.
+  /// Use this at startup time when failure is unrecoverable.
+  OrderBook(void *buf, std::size_t buf_bytes, const Params &params) noexcept {
+    if (!bind(buf, buf_bytes, params)) {
+      std::abort();
+    }
+  }
+
+  /// Factory — returns std::optional<OrderBook>. Preferred API for safe init.
+  [[nodiscard]] static std::optional<OrderBook>
+  create(void *buf, std::size_t buf_bytes, const Params &params) noexcept {
+    OrderBook book;
+    if (!book.bind(buf, buf_bytes, params)) {
+      return std::nullopt;
+    }
+    return book; // NRVO — no move needed, but move ctor available as fallback.
+  }
+
+  // Non-copyable.
   OrderBook(const OrderBook &) = delete;
   OrderBook &operator=(const OrderBook &) = delete;
-  OrderBook(OrderBook &&) = delete;
-  OrderBook &operator=(OrderBook &&) = delete;
+
+  // Movable — O(1) swap-based. IntrusiveList sentinel fixup handles
+  // linked-node pointer updates. Safe only at startup before hot-path use.
+  OrderBook(OrderBook &&other) noexcept { swap(other); }
+
+  OrderBook &operator=(OrderBook &&other) noexcept {
+    if (this != &other) {
+      OrderBook tmp(std::move(other));
+      swap(tmp); // tmp destructor cleans up our old state
+    }
+    return *this;
+  }
+
+  void swap(OrderBook &other) noexcept {
+    std::swap(order_slots_, other.order_slots_);
+    std::swap(level_slots_, other.level_slots_);
+    std::swap(max_orders_, other.max_orders_);
+    std::swap(max_levels_, other.max_levels_);
+    order_free_.swap(other.order_free_);
+    level_free_.swap(other.level_free_);
+    bids_.swap(other.bids_);
+    asks_.swap(other.asks_);
+    order_map_.swap(other.order_map_);
+    level_map_[side_index(Side::kBid)].swap(
+        other.level_map_[side_index(Side::kBid)]);
+    level_map_[side_index(Side::kAsk)].swap(
+        other.level_map_[side_index(Side::kAsk)]);
+  }
+
+  friend void swap(OrderBook &a, OrderBook &b) noexcept { a.swap(b); }
 
   ~OrderBook() noexcept {
     clear();
-    // Explicitly destroy PriceLevels before MmapRegion unmaps memory.
+    // Explicitly destroy PriceLevels before caller frees the buffer.
     // After clear(), all IntrusiveLists are empty, so destructors are cheap
     // (no-op clear). But skipping destructors for non-trivially-destructible
     // types is UB.
     if (level_slots_) {
-      for (std::size_t i = 0; i < MaxLevels; ++i) {
+      for (std::size_t i = 0; i < max_levels_; ++i) {
         std::destroy_at(&level_slots_[i]);
       }
     }
     // Orders are trivially destructible — no explicit destruction needed.
-    // MmapRegion destructors handle munmap.
   }
 
   // ---------------------------------------------------------------------------
@@ -253,6 +307,9 @@ public:
   // ---------------------------------------------------------------------------
 
   /// Add a resting limit order to the book.
+  /// Production code never calls this directly — all orders enter through
+  /// MatchingEngine::submit_order(), which calls rest_order() for unfilled
+  /// remainders. Public for test and benchmark use (OrderBook in isolation).
   /// @return true on success, false if order pool exhausted, level pool
   ///         exhausted, order_map full, or duplicate order_id.
   [[nodiscard]] bool add_order(OrderId id, Side side, Price price,
@@ -295,7 +352,6 @@ public:
     order->level = level;
     level->orders.push_back(*order);
     level->total_qty += qty;
-    ++level->order_count;
 
     return true;
   }
@@ -315,10 +371,9 @@ public:
     // Remove order from level's queue.
     level->orders.erase(*order);
     level->total_qty -= order->qty;
-    --level->order_count;
 
     // If level is now empty, remove it from the ladder and free it.
-    if (level->order_count == 0) {
+    if (level->orders.empty()) {
       remove_level(level);
     }
 
@@ -353,9 +408,8 @@ public:
 
       level->orders.erase(*order);
       level->total_qty -= order->qty;
-      --level->order_count;
 
-      if (level->order_count == 0) {
+      if (level->orders.empty()) {
         remove_level(level);
       }
 
@@ -388,8 +442,8 @@ public:
       level_map_[side_idx].clear();
     };
 
-    clear_side(bids_, 0);
-    clear_side(asks_, 1);
+    clear_side(bids_, side_index(Side::kBid));
+    clear_side(asks_, side_index(Side::kAsk));
     order_map_.clear();
 
     assert(bids_.empty() && "bids must be empty after clear");
@@ -429,9 +483,6 @@ public:
 
   /// @return Total quantity at the given price level, or 0 if no such level.
   [[nodiscard]] Qty volume_at_level(Side side, Price price) const noexcept {
-    // const method → level_map_ const is HashMap → find() const returns Value*
-    // Value = PriceLevel*, const so Value* = const(PriceLevel*)* = PriceLevel*
-    // const*
     auto *const *pp = level_map_[side_index(side)].find(price);
     if (!pp) {
       return 0;
@@ -446,12 +497,18 @@ public:
     if (!pp) {
       return 0;
     }
-    return (*pp)->order_count;
+    return static_cast<std::uint32_t>((*pp)->orders.size());
   }
 
   /// @return true if an order with the given ID exists in the book.
   [[nodiscard]] bool has_order(OrderId id) const noexcept {
     return order_map_.find(id) != nullptr;
+  }
+
+  /// @return Remaining qty of the order, or 0 if not found (fully filled).
+  [[nodiscard]] Qty order_qty(OrderId id) const noexcept {
+    const auto *order_ptr = order_map_.find(id);
+    return order_ptr ? (*order_ptr)->qty : 0;
   }
 
   /// @return Number of distinct price levels on the given side.
@@ -517,12 +574,11 @@ public:
 
     level->orders.erase(order);
     level->total_qty -= order.qty;
-    --level->order_count;
 
     order_map_.erase(order.order_id);
     free_order(&order);
 
-    if (level->order_count == 0) {
+    if (level->orders.empty()) {
       remove_level(level);
       return true;
     }
@@ -541,6 +597,136 @@ public:
   }
 
 private:
+  // ---------------------------------------------------------------------------
+  // Buffer binding (called by constructor and create() factory)
+  // ---------------------------------------------------------------------------
+
+  /// Partition the caller's buffer into 7 sub-regions.
+  /// Returns false on validation failure (null buf, too small, bad params).
+  [[nodiscard]] bool bind(void *buf, std::size_t buf_bytes,
+                          const Params &params) noexcept {
+    // Guard against re-bind (would leak PriceLevel destructor calls).
+    if (order_slots_ != nullptr) {
+      return false;
+    }
+
+    // Validate params.
+    if (params.max_orders == 0 || params.max_levels == 0) {
+      return false;
+    }
+    if (!mk::sys::is_power_of_two(
+            static_cast<std::uint32_t>(params.order_map_cap)) ||
+        params.order_map_cap < 4) {
+      return false;
+    }
+    if (!mk::sys::is_power_of_two(
+            static_cast<std::uint32_t>(params.level_map_cap)) ||
+        params.level_map_cap < 4) {
+      return false;
+    }
+    if (params.max_orders > params.order_map_cap) {
+      return false;
+    }
+    if (params.max_levels > params.level_map_cap) {
+      return false;
+    }
+
+    // Validate buffer.
+    if (buf == nullptr || buf_bytes < required_buffer_size(params)) {
+      return false;
+    }
+
+    // Store capacities for runtime bounds checks.
+    max_orders_ = params.max_orders;
+    max_levels_ = params.max_levels;
+
+    // Partition the buffer into sub-regions using Arena as a bump allocator.
+    mk::sys::memory::Arena arena(
+        std::span<std::byte>(static_cast<std::byte *>(buf), buf_bytes));
+
+    // 1. Order pool — zero-initialize for IntrusiveListHook safety.
+    order_slots_ = arena.alloc<Order>(params.max_orders);
+    if (!order_slots_) {
+      return false;
+    }
+    std::memset(order_slots_, 0, max_orders_ * sizeof(Order));
+
+    // 2. PriceLevel pool — placement-construct for IntrusiveList sentinel init.
+    level_slots_ = arena.alloc<PriceLevel>(params.max_levels);
+    if (!level_slots_) {
+      order_slots_ = nullptr;
+      return false;
+    }
+    for (std::size_t i = 0; i < max_levels_; ++i) {
+      std::construct_at(&level_slots_[i]);
+    }
+
+    // 3. Order free stack.
+    const auto ofs_size =
+        mk::ds::IndexFreeStack::required_buffer_size(params.max_orders);
+    auto *ofs_buf = arena.alloc(ofs_size, alignof(std::uint32_t));
+    auto order_free_opt = ofs_buf ? mk::ds::IndexFreeStack::create(
+                                        ofs_buf, ofs_size, params.max_orders)
+                                  : std::nullopt;
+    if (!order_free_opt) {
+      order_slots_ = nullptr;
+      return false;
+    }
+    order_free_ = std::move(*order_free_opt);
+
+    // 4. Level free stack.
+    const auto lfs_size =
+        mk::ds::IndexFreeStack::required_buffer_size(params.max_levels);
+    auto *lfs_buf = arena.alloc(lfs_size, alignof(std::uint32_t));
+    auto level_free_opt = lfs_buf ? mk::ds::IndexFreeStack::create(
+                                        lfs_buf, lfs_size, params.max_levels)
+                                  : std::nullopt;
+    if (!level_free_opt) {
+      order_slots_ = nullptr;
+      return false;
+    }
+    level_free_ = std::move(*level_free_opt);
+
+    // 5. Order HashMap.
+    using OrderMap = mk::ds::HashMap<OrderId, Order *>;
+    const auto om_size = OrderMap::required_buffer_size(params.order_map_cap);
+    auto *om_buf = arena.alloc(om_size, OrderMap::slot_alignment());
+    auto order_map_opt =
+        om_buf ? OrderMap::create(om_buf, om_size, params.order_map_cap)
+               : std::nullopt;
+    if (!order_map_opt) {
+      order_slots_ = nullptr;
+      return false;
+    }
+    order_map_ = std::move(*order_map_opt);
+
+    // 6. Bid level HashMap.
+    using LevelMap = mk::ds::HashMap<Price, PriceLevel *>;
+    const auto lm_size = LevelMap::required_buffer_size(params.level_map_cap);
+    auto *bid_buf = arena.alloc(lm_size, LevelMap::slot_alignment());
+    auto bid_map_opt =
+        bid_buf ? LevelMap::create(bid_buf, lm_size, params.level_map_cap)
+                : std::nullopt;
+    if (!bid_map_opt) {
+      order_slots_ = nullptr;
+      return false;
+    }
+    level_map_[side_index(Side::kBid)] = std::move(*bid_map_opt);
+
+    // 7. Ask level HashMap.
+    auto *ask_buf = arena.alloc(lm_size, LevelMap::slot_alignment());
+    auto ask_map_opt =
+        ask_buf ? LevelMap::create(ask_buf, lm_size, params.level_map_cap)
+                : std::nullopt;
+    if (!ask_map_opt) {
+      order_slots_ = nullptr;
+      return false;
+    }
+    level_map_[side_index(Side::kAsk)] = std::move(*ask_map_opt);
+
+    return true;
+  }
+
   /// Convert Side enum to array index with bounds check.
   /// Side is uint8_t with values 0/1 — this guards against invalid casts.
   static constexpr int side_index(Side s) noexcept {
@@ -550,11 +736,11 @@ private:
   }
 
   // ---------------------------------------------------------------------------
-  // Pool management (FixedIndexFreeStack + MmapRegion-backed slots)
+  // Pool management (IndexFreeStack + caller-managed slots)
   // ---------------------------------------------------------------------------
   //
-  // Each pool is an MmapRegion-backed array of pre-allocated slots plus an
-  // FixedIndexFreeStack managing free slot indices.
+  // Each pool is a caller-managed array of pre-allocated slots plus an
+  // IndexFreeStack managing free slot indices.
   //
   // Allocate: pop index from free stack, return &slots_[index].
   // Deallocate: compute index from pointer arithmetic, push to free stack.
@@ -563,15 +749,15 @@ private:
   // overhead, no alignment constraints beyond T's natural alignment.
 
   [[nodiscard]] Order *alloc_order() noexcept {
-    auto idx = order_free_.pop();
-    if (!idx) [[unlikely]] {
+    std::uint32_t idx = 0;
+    if (!order_free_.pop(idx)) [[unlikely]] {
       return nullptr;
     }
-    return &order_slots_[*idx];
+    return &order_slots_[idx];
   }
 
   void free_order(Order *order) noexcept {
-    assert(order >= &order_slots_[0] && order < &order_slots_[0] + MaxOrders);
+    assert(order >= &order_slots_[0] && order < &order_slots_[0] + max_orders_);
     auto idx = static_cast<std::uint32_t>(order - &order_slots_[0]);
     // Reset the order's hook state so it's cleanly reusable.
     order->prev = nullptr;
@@ -581,15 +767,15 @@ private:
   }
 
   [[nodiscard]] PriceLevel *alloc_level() noexcept {
-    auto idx = level_free_.pop();
-    if (!idx) [[unlikely]] {
+    std::uint32_t idx = 0;
+    if (!level_free_.pop(idx)) [[unlikely]] {
       return nullptr;
     }
-    return &level_slots_[*idx];
+    return &level_slots_[idx];
   }
 
   void free_level(PriceLevel *level) noexcept {
-    assert(level >= &level_slots_[0] && level < &level_slots_[0] + MaxLevels);
+    assert(level >= &level_slots_[0] && level < &level_slots_[0] + max_levels_);
     // Defensive: freeing a level that still has orders would leak them.
     // remove_level() already checks this, but guard against direct misuse.
     assert(level->orders.empty() &&
@@ -625,11 +811,14 @@ private:
 
     level->price = price;
     level->total_qty = 0;
-    level->order_count = 0;
     level->side = side;
     // level->orders is already default-constructed (empty IntrusiveList).
 
     // Insert into the level map.
+    // Logically unreachable: max_levels <= level_map_cap (enforced by bind()),
+    // and alloc_level() above would fail before the map runs out of slots.
+    // Duplicate key is also impossible — find() returned nullptr above.
+    // Defensive check retained for safety.
     if (!level_map_[si].insert(price, level)) [[unlikely]] {
       free_level(level);
       return nullptr;
@@ -684,7 +873,6 @@ private:
 
   /// Remove an empty price level from the ladder, level map, and free pool.
   void remove_level(PriceLevel *level) noexcept {
-    assert(level->order_count == 0);
     assert(level->orders.empty());
 
     const int si = side_index(level->side);
@@ -694,46 +882,6 @@ private:
     level_map_[si].erase(level->price);
     free_level(level);
   }
-
-  // ---------------------------------------------------------------------------
-  // Data members
-  // ---------------------------------------------------------------------------
-
-  // Pools — MmapRegion-backed storage with FixedIndexFreeStack for slot
-  // management.
-  mk::sys::memory::MmapRegion order_memory_;
-  Order *order_slots_{nullptr};
-  mk::ds::FixedIndexFreeStack<MaxOrders> order_free_;
-
-  mk::sys::memory::MmapRegion level_memory_;
-  PriceLevel *level_slots_{nullptr};
-  mk::ds::FixedIndexFreeStack<MaxLevels> level_free_;
-
-  // Sorted price ladders.
-  mk::ds::IntrusiveList<PriceLevel> bids_; ///< Descending (best = front).
-  mk::ds::IntrusiveList<PriceLevel> asks_; ///< Ascending (best = front).
-
-  // Lookup maps — HashMap with MmapRegion-backed buffers.
-  // Unlike FixedHashMap (inline std::array), HashMap stores only a pointer
-  // to externally-owned memory. This keeps OrderBook's sizeof small (~272KB
-  // with default params instead of ~2.15MB) and gives explicit control over
-  // page size, NUMA placement, and prefaulting for each map independently.
-  mk::sys::memory::MmapRegion order_map_memory_;
-  mk::ds::HashMap<OrderId, Order *> order_map_;
-
-  // Price-to-level lookup: hash map (general-purpose), one per side.
-  //
-  // Alternative used in production for fixed-tick instruments:
-  //   PriceLevel* level_by_tick_[MAX_TICKS];  // direct-indexed array
-  // Convert price to tick index (price / tick_size), then array[tick_idx].
-  // Eliminates hash computation + linear probing entirely — pure O(1) with
-  // zero hash overhead. Requires bounded price range per instrument.
-  //
-  // We use HashMap because this is a general-purpose book (no assumption
-  // about tick size or price range). For a single-instrument production book
-  // with a known tick size, the direct-indexed array is strictly faster.
-  mk::sys::memory::MmapRegion level_map_memory_[2];
-  mk::ds::HashMap<Price, PriceLevel *> level_map_[2];
 };
 
 } // namespace mk::algo

@@ -123,12 +123,10 @@ public:
     }
 
     // Allocate a node from the pool.
-    auto opt_idx = free_list_.pop();
-    if (!opt_idx) [[unlikely]] {
+    std::uint32_t idx = 0;
+    if (!free_list_.pop(idx)) [[unlikely]] {
       return kInvalidHandle;
     }
-
-    const auto idx = *opt_idx;
     TimerNode &node = nodes_[idx];
 
     // Initialize node payload.

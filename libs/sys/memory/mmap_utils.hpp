@@ -55,14 +55,35 @@ enum class RegionIntent : std::uint8_t {
   kCold,       // No prefault. For cold-path, non-latency-critical regions.
 };
 
+/// Map PrefaultPolicy to the corresponding RegionIntent.
+/// Centralizes the policy→intent mapping used by Arena and ObjectPool
+/// convenience constructors. Manual prefault policies degrade to their
+/// non-manual equivalents (kManualWrite → kHotRw, kManualRead → kReadMostly).
+[[nodiscard]] constexpr RegionIntent
+to_region_intent(PrefaultPolicy pf) noexcept {
+  switch (pf) {
+  case PrefaultPolicy::kPopulateWrite:
+  case PrefaultPolicy::kManualWrite:
+    return RegionIntent::kHotRw;
+  case PrefaultPolicy::kPopulateRead:
+  case PrefaultPolicy::kManualRead:
+    return RegionIntent::kReadMostly;
+  case PrefaultPolicy::kNone:
+    return RegionIntent::kCold;
+  }
+  return RegionIntent::kHotRw; // Defensive default.
+}
+
 /// Core intent API (long-term extension point).
 [[nodiscard]] std::optional<MmapRegion>
-try_allocate_region(const RegionIntentConfig &cfg, RegionIntent intent) noexcept;
-[[nodiscard]] MmapRegion
-allocate_region(const RegionIntentConfig &cfg, RegionIntent intent) noexcept;
+try_allocate_region(const RegionIntentConfig &cfg,
+                    RegionIntent intent) noexcept;
+[[nodiscard]] MmapRegion allocate_region(const RegionIntentConfig &cfg,
+                                         RegionIntent intent) noexcept;
 
 /// Intent-based helpers (recommended for app code).
-/// Thin wrappers over try_allocate_region/allocate_region for call-site clarity.
+/// Thin wrappers over try_allocate_region/allocate_region for call-site
+/// clarity.
 [[nodiscard]] inline std::optional<MmapRegion>
 try_allocate_hot_rw_region(const RegionIntentConfig &cfg) noexcept {
   return try_allocate_region(cfg, RegionIntent::kHotRw);

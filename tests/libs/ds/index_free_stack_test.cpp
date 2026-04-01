@@ -26,6 +26,12 @@ constexpr std::size_t kDefaultCapacity = 32;
 /// Fixture that allocates an aligned buffer and constructs an IndexFreeStack
 /// via the create() factory.
 class IndexFreeStackTest : public ::testing::Test {
+public:
+  IndexFreeStackTest(const IndexFreeStackTest &) = delete;
+  IndexFreeStackTest &operator=(const IndexFreeStackTest &) = delete;
+  IndexFreeStackTest(IndexFreeStackTest &&) = delete;
+  IndexFreeStackTest &operator=(IndexFreeStackTest &&) = delete;
+
 protected:
   static constexpr std::size_t kCap = kDefaultCapacity;
   static constexpr auto kAlign = std::align_val_t{alignof(std::uint32_t)};
@@ -38,16 +44,11 @@ protected:
     if (!opt) {
       std::abort();
     }
-    return std::move(*opt);  // NOLINT(bugprone-unchecked-optional-access)
+    return std::move(*opt); // NOLINT(bugprone-unchecked-optional-access)
   }();
 
   IndexFreeStackTest() = default;
   ~IndexFreeStackTest() override { ::operator delete[](buf_, kAlign); }
-
-  IndexFreeStackTest(const IndexFreeStackTest &) = delete;            // NOLINT(modernize-use-equals-delete)
-  IndexFreeStackTest &operator=(const IndexFreeStackTest &) = delete; // NOLINT(modernize-use-equals-delete)
-  IndexFreeStackTest(IndexFreeStackTest &&) = delete;                 // NOLINT(modernize-use-equals-delete)
-  IndexFreeStackTest &operator=(IndexFreeStackTest &&) = delete;      // NOLINT(modernize-use-equals-delete)
 };
 
 // =============================================================================
@@ -62,10 +63,12 @@ TEST(IndexFreeStackCreateTest, FactorySuccess) {
 
   auto opt = IndexFreeStack::create(buf, buf_size, kCap);
   ASSERT_TRUE(opt.has_value());
-  EXPECT_EQ(opt->capacity(), kCap);    // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(opt->available(), kCap);   // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_TRUE(opt->full());           // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_FALSE(opt->empty());         // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_EQ(opt->capacity(), kCap);
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_EQ(opt->available(), kCap);
+  EXPECT_TRUE(opt->full());   // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_FALSE(opt->empty()); // NOLINT(bugprone-unchecked-optional-access)
 
   ::operator delete[](buf, std::align_val_t{alignof(std::uint32_t)});
 }
@@ -180,7 +183,8 @@ TEST(IndexFreeStackDeathTest, PushOutOfRangeIndexAborts) {
         auto *buf =
             new (std::align_val_t{alignof(std::uint32_t)}) std::byte[buf_size];
         IndexFreeStack stack(buf, buf_size, kCap);
-        (void)stack.pop();
+        std::uint32_t dummy = 0;
+        (void)stack.pop(dummy);
         stack.push(4); // idx == capacity → out of range.
       },
       "");
@@ -195,9 +199,10 @@ TEST(IndexFreeStackDeathTest, DoubleFreeAborts) {
         auto *buf =
             new (std::align_val_t{alignof(std::uint32_t)}) std::byte[buf_size];
         IndexFreeStack stack(buf, buf_size, kCap);
-        auto idx = stack.pop();
-        stack.push(*idx);  // NOLINT(bugprone-unchecked-optional-access)
-        stack.push(*idx); // Already returned — double-free.  // NOLINT(bugprone-unchecked-optional-access)
+        std::uint32_t idx = 0;
+        (void)stack.pop(idx);
+        stack.push(idx);
+        stack.push(idx); // Already returned — double-free.
       },
       "");
 }
@@ -210,8 +215,9 @@ TEST(IndexFreeStackDeathTest, PushNeverPoppedIndexAborts) {
         auto *buf =
             new (std::align_val_t{alignof(std::uint32_t)}) std::byte[buf_size];
         IndexFreeStack stack(buf, buf_size, kCap);
-        auto popped = stack.pop();
-        const std::uint32_t other = (*popped + 1) % 4;  // NOLINT(bugprone-unchecked-optional-access)
+        std::uint32_t popped = 0;
+        (void)stack.pop(popped);
+        const std::uint32_t other = (popped + 1) % 4;
         stack.push(other);
       },
       "");
@@ -232,55 +238,63 @@ TEST_F(IndexFreeStackTest, StartsFullWithAllIndices) {
 TEST_F(IndexFreeStackTest, PopReturnsUniqueIndices) {
   std::set<std::uint32_t> seen;
   for (std::size_t i = 0; i < kCap; ++i) {
-    auto idx = stack_.pop();
-    ASSERT_TRUE(idx.has_value());
-    EXPECT_LT(*idx, kCap);                                          // NOLINT(bugprone-unchecked-optional-access)
-    EXPECT_TRUE(seen.insert(*idx).second) << "Duplicate index: " << *idx;  // NOLINT(bugprone-unchecked-optional-access)
+    std::uint32_t idx = 0;
+    ASSERT_TRUE(stack_.pop(idx));
+    EXPECT_LT(idx, kCap);
+    EXPECT_TRUE(seen.insert(idx).second) << "Duplicate index: " << idx;
   }
   EXPECT_TRUE(stack_.empty());
   EXPECT_EQ(stack_.available(), 0U);
 }
 
-TEST_F(IndexFreeStackTest, PopFromEmptyReturnsNullopt) {
+TEST_F(IndexFreeStackTest, PopFromEmptyReturnsFalse) {
   // Drain the stack.
+  std::uint32_t dummy = 0;
   for (std::size_t i = 0; i < kCap; ++i) {
-    (void)stack_.pop();
+    (void)stack_.pop(dummy);
   }
-  EXPECT_EQ(stack_.pop(), std::nullopt);
+  EXPECT_FALSE(stack_.pop(dummy));
   EXPECT_TRUE(stack_.empty());
 }
 
 TEST_F(IndexFreeStackTest, PushRecyclesIndex) {
-  auto idx = stack_.pop();
-  ASSERT_TRUE(idx.has_value());
+  std::uint32_t idx = 0;
+  ASSERT_TRUE(stack_.pop(idx));
   EXPECT_EQ(stack_.available(), kCap - 1);
 
-  stack_.push(*idx);  // NOLINT(bugprone-unchecked-optional-access)
+  stack_.push(idx);
   EXPECT_EQ(stack_.available(), kCap);
   EXPECT_TRUE(stack_.full());
 }
 
 TEST_F(IndexFreeStackTest, LIFOOrdering) {
-  auto a = stack_.pop();
-  auto b = stack_.pop();
-  auto c = stack_.pop();
+  std::uint32_t a = 0;
+  std::uint32_t b = 0;
+  std::uint32_t c = 0;
+  ASSERT_TRUE(stack_.pop(a));
+  ASSERT_TRUE(stack_.pop(b));
+  ASSERT_TRUE(stack_.pop(c));
 
-  stack_.push(*a);  // NOLINT(bugprone-unchecked-optional-access)
-  stack_.push(*b);  // NOLINT(bugprone-unchecked-optional-access)
-  stack_.push(*c);  // NOLINT(bugprone-unchecked-optional-access)
+  stack_.push(a);
+  stack_.push(b);
+  stack_.push(c);
 
   // LIFO: should get c, b, a back.
-  EXPECT_EQ(stack_.pop(), c);
-  EXPECT_EQ(stack_.pop(), b);
-  EXPECT_EQ(stack_.pop(), a);
+  std::uint32_t out = 0;
+  ASSERT_TRUE(stack_.pop(out));
+  EXPECT_EQ(out, c);
+  ASSERT_TRUE(stack_.pop(out));
+  EXPECT_EQ(out, b);
+  ASSERT_TRUE(stack_.pop(out));
+  EXPECT_EQ(out, a);
 }
 
 TEST_F(IndexFreeStackTest, ExhaustAndRefill) {
   std::vector<std::uint32_t> indices;
   for (std::size_t i = 0; i < kCap; ++i) {
-    auto idx = stack_.pop();
-    ASSERT_TRUE(idx.has_value());
-    indices.push_back(*idx);  // NOLINT(bugprone-unchecked-optional-access)
+    std::uint32_t idx = 0;
+    ASSERT_TRUE(stack_.pop(idx));
+    indices.push_back(idx);
   }
   EXPECT_TRUE(stack_.empty());
 
@@ -298,16 +312,17 @@ TEST_F(IndexFreeStackTest, CapacityOne) {
   auto *buf1 = new (std::align_val_t{alignof(std::uint32_t)}) std::byte[size1];
   auto opt = IndexFreeStack::create(buf1, size1, kCap1);
   ASSERT_TRUE(opt.has_value());
-  auto &s = *opt;  // NOLINT(bugprone-unchecked-optional-access)
+  auto &s = *opt; // NOLINT(bugprone-unchecked-optional-access)
 
   EXPECT_EQ(s.available(), 1U);
 
-  auto idx = s.pop();
-  ASSERT_TRUE(idx.has_value());
-  EXPECT_EQ(*idx, 0U);  // NOLINT(bugprone-unchecked-optional-access)
+  std::uint32_t idx = 0;
+  ASSERT_TRUE(s.pop(idx));
+  EXPECT_EQ(idx, 0U);
   EXPECT_TRUE(s.empty());
 
-  EXPECT_EQ(s.pop(), std::nullopt);
+  std::uint32_t dummy = 0;
+  EXPECT_FALSE(s.pop(dummy));
 
   s.push(0);
   EXPECT_TRUE(s.full());
@@ -321,8 +336,9 @@ TEST_F(IndexFreeStackTest, CapacityOne) {
 
 TEST_F(IndexFreeStackTest, MoveConstruction) {
   // Pop a few to create non-trivial state.
-  (void)stack_.pop();
-  (void)stack_.pop();
+  std::uint32_t dummy = 0;
+  (void)stack_.pop(dummy);
+  (void)stack_.pop(dummy);
   const auto avail_before = stack_.available();
 
   const IndexFreeStack moved(std::move(stack_));
@@ -335,8 +351,9 @@ TEST_F(IndexFreeStackTest, MoveConstruction) {
 }
 
 TEST_F(IndexFreeStackTest, MoveAssignment) {
-  (void)stack_.pop();
-  (void)stack_.pop();
+  std::uint32_t dummy = 0;
+  (void)stack_.pop(dummy);
+  (void)stack_.pop(dummy);
   const auto avail_before = stack_.available();
 
   IndexFreeStack target;
@@ -369,18 +386,21 @@ TEST(IndexFreeStackCreateTest, NonPowerOfTwoCapacity) {
 
   auto opt = IndexFreeStack::create(buf, buf_size, kCap);
   ASSERT_TRUE(opt.has_value());
-  EXPECT_EQ(opt->capacity(), kCap);    // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(opt->available(), kCap);   // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_EQ(opt->capacity(), kCap);
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_EQ(opt->available(), kCap);
 
   // Verify all 13 indices are unique and in [0, 13).
   std::set<std::uint32_t> seen;
   for (std::size_t i = 0; i < kCap; ++i) {
-    auto idx = opt->pop();            // NOLINT(bugprone-unchecked-optional-access)
-    ASSERT_TRUE(idx.has_value());
-    EXPECT_LT(*idx, kCap);             // NOLINT(bugprone-unchecked-optional-access)
-    EXPECT_TRUE(seen.insert(*idx).second);  // NOLINT(bugprone-unchecked-optional-access)
+    std::uint32_t idx = 0;
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    ASSERT_TRUE(opt->pop(idx));
+    EXPECT_LT(idx, kCap);
+    EXPECT_TRUE(seen.insert(idx).second);
   }
-  EXPECT_TRUE(opt->empty());          // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(opt->empty()); // NOLINT(bugprone-unchecked-optional-access)
 
   ::operator delete[](buf, std::align_val_t{alignof(std::uint32_t)});
 }
@@ -397,22 +417,24 @@ TEST(IndexFreeStackCreateTest, LargeCapacity) {
 
   auto opt = IndexFreeStack::create(buf, buf_size, kCap);
   ASSERT_TRUE(opt.has_value());
-  EXPECT_EQ(opt->capacity(), kCap);  // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_EQ(opt->capacity(), kCap);
 
   // Pop all, push all back.
   std::vector<std::uint32_t> indices;
   indices.reserve(kCap);
   for (std::size_t i = 0; i < kCap; ++i) {
-    auto idx = opt->pop();            // NOLINT(bugprone-unchecked-optional-access)
-    ASSERT_TRUE(idx.has_value());
-    indices.push_back(*idx);           // NOLINT(bugprone-unchecked-optional-access)
+    std::uint32_t idx = 0;
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    ASSERT_TRUE(opt->pop(idx));
+    indices.push_back(idx);
   }
-  EXPECT_TRUE(opt->empty());          // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(opt->empty()); // NOLINT(bugprone-unchecked-optional-access)
 
   for (auto idx : indices) {
-    opt->push(idx);                    // NOLINT(bugprone-unchecked-optional-access)
+    opt->push(idx); // NOLINT(bugprone-unchecked-optional-access)
   }
-  EXPECT_TRUE(opt->full());           // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(opt->full()); // NOLINT(bugprone-unchecked-optional-access)
 
   ::operator delete[](buf, std::align_val_t{alignof(std::uint32_t)});
 }

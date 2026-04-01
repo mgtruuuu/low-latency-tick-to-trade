@@ -39,7 +39,7 @@ protected:
     if (!opt) {
       std::abort();
     }
-    return std::move(*opt);  // NOLINT(bugprone-unchecked-optional-access)
+    return std::move(*opt); // NOLINT(bugprone-unchecked-optional-access)
   }()};
 
   /// Simple counter callback: increments an int pointed to by ctx.
@@ -73,10 +73,14 @@ TEST_F(TimingWheelRtTest, CreateFactorySuccess) {
                            Wheel::required_buffer_size(kWheelSize, kMaxTimers),
                            kWheelSize, kMaxTimers);
   ASSERT_TRUE(opt.has_value());
-  EXPECT_EQ(kWheelSize, opt->wheel_size());   // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(kMaxTimers, opt->max_timers());    // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(0U, opt->active_count());          // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(0U, opt->current_tick());          // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(kWheelSize,
+            opt->wheel_size()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(kMaxTimers,
+            opt->max_timers()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(0U,
+            opt->active_count()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(0U,
+            opt->current_tick()); // NOLINT(bugprone-unchecked-optional-access)
 }
 
 TEST_F(TimingWheelRtTest, CreateWithNullptrReturnsFalse) {
@@ -528,10 +532,8 @@ TEST_F(TimingWheelRtTest, CallbackCancelsMultipleLaterNodesInSameChain) {
     handle_t target_b;
     int fired;
   };
-  MultiCancelCtx ctx{.wheel = &wheel_,
-                     .target_a = a_handle,
-                     .target_b = b_handle,
-                     .fired = 0};
+  MultiCancelCtx ctx{
+      .wheel = &wheel_, .target_a = a_handle, .target_b = b_handle, .fired = 0};
 
   const static auto cancel_multi_cb = [](void *raw) noexcept {
     auto *c = static_cast<MultiCancelCtx *>(raw);

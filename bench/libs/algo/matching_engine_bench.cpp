@@ -19,9 +19,11 @@
 #include "bench_utils.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 using namespace mk::algo;
 using namespace mk::sys;
@@ -33,7 +35,13 @@ namespace {
 // Benchmark configuration
 // ============================================================================
 
-using BenchEngine = MatchingEngine<64, 16384, 1024, 16384, 2048>;
+constexpr OrderBook::Params kBenchParams{
+    .max_orders = 16384,
+    .max_levels = 1024,
+    .order_map_cap = 16384,
+    .level_map_cap = 2048,
+};
+using BenchEngine = MatchingEngine<64>;
 
 constexpr std::size_t kN = 10'000;
 
@@ -62,8 +70,13 @@ void bench_match(const TscCalibration &cal) {
   constexpr std::size_t kBatch = 1000;
   std::size_t measured = 0;
 
+  // Buffer allocated once, reused across batches by constructing new engines.
+  std::vector<std::byte> buf(BenchEngine::required_buffer_size(kBenchParams));
+
   while (measured < kN) {
-    BenchEngine engine;
+    // Construct a fresh engine on the same buffer.
+    // clear() in init() resets all state including tombstones.
+    BenchEngine engine(buf.data(), buf.size(), kBenchParams);
     OrderId next_id = 1;
     const std::size_t count = std::min(kBatch, kN - measured);
 
@@ -87,10 +100,6 @@ void bench_match(const TscCalibration &cal) {
       }
 
       // Crossing buy — this is what we measure.
-      // rdtsc_start/rdtsc_end: serialized TSC reads ensuring the CPU
-      // pipeline is drained before/after the measured code. Without
-      // serialization, out-of-order execution can shift the RDTSC
-      // across the code boundary, adding noise to min/p99 figures.
       const OrderId buy_id = next_id++;
       const auto t0 = rdtsc_start();
       auto result = engine.submit_order(buy_id, Side::kBid, ask_price,

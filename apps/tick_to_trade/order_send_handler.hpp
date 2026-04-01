@@ -25,8 +25,7 @@
 
 #include "net/tcp_socket.hpp"
 
-#include "sys/log/async_logger.hpp"
-#include "sys/log/log_macros.hpp"
+#include "pipeline_log_push.hpp"
 #include "sys/nano_clock.hpp"
 
 #include <atomic>
@@ -56,7 +55,7 @@ public:
             LatencyTracker &tracker, net::TcpSocket &tcp_sock,
             std::span<std::byte> scratch, std::span<std::byte> tcp_tx_buf,
             std::uint64_t t0, ConnectionState &conn,
-            sys::log::LogQueue &log_queue) noexcept {
+            PipelineLogQueue &log_queue) noexcept {
 #ifdef PROFILE_STAGES
     auto t3 = sys::rdtsc();
 #endif
@@ -78,9 +77,9 @@ public:
       }
 
       modifies_serialized_.fetch_add(1, std::memory_order_relaxed);
-      (void)sys::log::log_order(
-          log_queue, sys::log::kThreadIdStrategy, sys::log::LogLevel::kInfo,
-          sys::log::OrderEvent::kModifySent, modify.symbol_id, 0,
+      (void)log_order(
+          log_queue, kThreadIdStrategy, LogLevel::kInfo,
+          OrderEvent::kModifySent, modify.symbol_id, 0,
           modify.new_price, modify.new_qty, modify.client_order_id);
 
       auto t4 = sys::rdtsc();
@@ -114,9 +113,9 @@ public:
     const bool send_ok = check_send_result(send_result, conn, "NewOrder");
 
     orders_serialized_.fetch_add(1, std::memory_order_relaxed);
-    (void)sys::log::log_order(
-        log_queue, sys::log::kThreadIdStrategy, sys::log::LogLevel::kInfo,
-        sys::log::OrderEvent::kNewOrder, order.symbol_id,
+    (void)log_order(
+        log_queue, kThreadIdStrategy, LogLevel::kInfo,
+        OrderEvent::kNewOrder, order.symbol_id,
         static_cast<std::uint8_t>(order.side), order.price, order.qty,
         order.client_order_id);
 

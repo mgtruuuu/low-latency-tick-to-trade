@@ -96,7 +96,7 @@ TEST(ScopedFdTest, MoveConstructTransfersOwnership) {
 
   const ScopedFd b(std::move(a));
   // Source is invalidated.
-  EXPECT_FALSE(a.is_valid());  // NOLINT(bugprone-use-after-move)
+  EXPECT_FALSE(a.is_valid()); // NOLINT(bugprone-use-after-move)
   EXPECT_EQ(a.get(), -1);
   // Destination owns the fd.
   EXPECT_TRUE(b.is_valid());
@@ -116,7 +116,7 @@ TEST(ScopedFdTest, MoveAssignTransfersOwnershipAndClosesPrevious) {
 
   b = std::move(a);
   // a is invalidated.
-  EXPECT_FALSE(a.is_valid());  // NOLINT(bugprone-use-after-move)
+  EXPECT_FALSE(a.is_valid()); // NOLINT(bugprone-use-after-move)
   // b now owns r1.
   EXPECT_EQ(b.get(), r1);
   // The previous fd (r2) must be closed.
@@ -138,7 +138,7 @@ TEST(ScopedFdTest, MoveFromInvalidToInvalid) {
   ScopedFd a;
   ScopedFd b;
   b = std::move(a);
-  EXPECT_FALSE(a.is_valid());  // NOLINT(bugprone-use-after-move)
+  EXPECT_FALSE(a.is_valid()); // NOLINT(bugprone-use-after-move)
   EXPECT_FALSE(b.is_valid());
 }
 
@@ -151,7 +151,7 @@ TEST(ScopedFdTest, MoveFromInvalidToValid) {
   const int old_fd = b.get();
 
   b = std::move(a);
-  EXPECT_FALSE(a.is_valid());  // NOLINT(bugprone-use-after-move)
+  EXPECT_FALSE(a.is_valid()); // NOLINT(bugprone-use-after-move)
   EXPECT_FALSE(b.is_valid());
   // r was closed when b was overwritten.
   EXPECT_FALSE(is_fd_open(old_fd));

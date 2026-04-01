@@ -52,7 +52,9 @@
 #include "net/scoped_fd.hpp"
 #include "net/tcp_socket.hpp"
 #include "net/udp_socket.hpp"
-#include "sys/log/async_logger.hpp"
+#include "pipeline_log_entry.hpp"
+#include "pipeline_log_formatter.hpp"
+#include "sys/log/async_drain_loop.hpp"
 #include "sys/log/signal_logger.hpp"
 #include "sys/memory/global_new_delete.hpp"
 #include "sys/memory/mmap_utils.hpp"
@@ -93,7 +95,8 @@ ABSL_FLAG(int32_t, pin_core_strategy, -1,
 ABSL_FLAG(int64_t, spread_threshold, 1000,
           "Spread threshold for strategy signal (in price ticks)");
 ABSL_FLAG(uint32_t, order_qty, 10, "Default order quantity");
-ABSL_FLAG(uint32_t, max_outstanding, 256, "Maximum outstanding orders (global)");
+ABSL_FLAG(uint32_t, max_outstanding, 1024,
+          "Maximum outstanding orders (global)");
 ABSL_FLAG(uint32_t, max_outstanding_per_symbol, 16,
           "Maximum outstanding orders per symbol");
 ABSL_FLAG(int64_t, max_position, 100, "Maximum absolute net position");
@@ -597,7 +600,7 @@ int main(int argc, char **argv) {
   // amortizes syscall overhead across UDP burst. Matches kDrainBatch
   // in strategy_thread.hpp so consumer keeps pace with producer.
   constexpr unsigned int kMdBatchSize = 64;
-  constexpr std::size_t kMdBufSize = 64;  // per-datagram buffer (36B wire + pad)
+  constexpr std::size_t kMdBufSize = 64; // per-datagram buffer (36B wire + pad)
   auto md_region =
       alloc_startup_region(mk::app::md_ctx_buf_size(kMdBatchSize, kMdBufSize));
   mk::sys::log::signal_log("[PIPELINE] MdCtx: batch=", kMdBatchSize,
@@ -645,11 +648,33 @@ int main(int argc, char **argv) {
       static_cast<mk::app::LatencyTracker *>(tracker_region.get()));
   mk::sys::log::signal_log("[PIPELINE] LatencyTracker: ", tracker_region.size(),
                            " bytes\n");
-  MdToStrategyQueue md_queue(static_cast<QueuedUpdate *>(queue_region.get()),
+  MdToStrategyQueue md_queue(queue_region.get(), queue_region.size(),
                              kMdToStrategyQueueCapacity);
-  mk::sys::log::AsyncLogger async_logger("pipeline.log", 4096, numa_node);
-  async_logger.start(pin_core_logger);
-  mk::sys::log::signal_log("[PIPELINE] AsyncLogger: core=", pin_core_logger,
+
+  // Log queue buffers — centralized allocation, same NUMA node as
+  // hot-path producers (MD, Strategy). Queues are non-owning SPSCQueues;
+  // the drain loop only receives pointers via register_queue().
+  constexpr std::uint32_t kLogQueueCapacity = 4096;
+  auto md_log_region = alloc_startup_region(
+      mk::app::PipelineLogQueue::required_buffer_size(kLogQueueCapacity));
+  auto strat_log_region = alloc_startup_region(
+      mk::app::PipelineLogQueue::required_buffer_size(kLogQueueCapacity));
+  mk::sys::log::signal_log(
+      "[PIPELINE] Log queues: capacity=", kLogQueueCapacity, " (",
+      md_log_region.size() + strat_log_region.size(), " bytes)\n");
+
+  mk::app::PipelineLogQueue md_log_queue(
+      md_log_region.get(), md_log_region.size(), kLogQueueCapacity);
+  mk::app::PipelineLogQueue strat_log_queue(
+      strat_log_region.get(), strat_log_region.size(), kLogQueueCapacity);
+
+  using DrainLoop = mk::sys::log::AsyncDrainLoop<mk::app::LogEntry,
+                                                 mk::app::PipelineLogFormatter>;
+  DrainLoop drain_loop("pipeline.log");
+  drain_loop.register_queue(&md_log_queue);
+  drain_loop.register_queue(&strat_log_queue);
+  drain_loop.start(pin_core_logger);
+  mk::sys::log::signal_log("[PIPELINE] DrainLoop: core=", pin_core_logger,
                            "\n");
 
   // -- Lock all pages into RAM --
@@ -714,7 +739,7 @@ int main(int argc, char **argv) {
       .tracker = *tracker,
       .md_ctx = md_ctx,
       .md_queue = md_queue,
-      .log_queue = async_logger.md_queue(),
+      .log_queue = md_log_queue,
       .stop_flag = g_stop,
       .pin_core_md = pin_core_md,
       .max_symbols = ActiveStrategy::kMaxSymbols,
@@ -739,7 +764,7 @@ int main(int argc, char **argv) {
       .kill_switch_flag = g_kill_switch,
       .pin_core = pin_core_strategy,
       .stats_interval_ns = stats_ns,
-      .log_queue = async_logger.strategy_queue(),
+      .log_queue = strat_log_queue,
   });
   strategy_thread.start();
 
@@ -750,10 +775,9 @@ int main(int argc, char **argv) {
 
   // Stop async logger after both hot threads have exited (no more pushes).
   // Final drain flushes remaining entries to file.
-  async_logger.stop();
+  drain_loop.stop();
   mk::sys::log::signal_log("[PIPELINE] Async logger stopped (",
-                           async_logger.entries_written(),
-                           " entries written)\n");
+                           drain_loop.entries_written(), " entries written)\n");
 
   // ================================================================
   // COLD PATH: Shutdown

@@ -41,12 +41,15 @@ TEST(LengthPrefixCodecTest, RoundTrip) {
 
   const auto written = mk::net::encode_length_prefix_frame(buf, payload);
   ASSERT_TRUE(written.has_value());
-  EXPECT_EQ(*written, mk::net::kLengthPrefixSize + 5);  // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_EQ(*written, mk::net::kLengthPrefixSize + 5);
 
-  const auto result = mk::net::decode_length_prefix_frame(
-      std::span<const std::byte>{buf}.first(*written));  // NOLINT(bugprone-unchecked-optional-access)
+  const auto result =
+      mk::net::decode_length_prefix_frame(std::span<const std::byte>{buf}.first(
+          *written)); // NOLINT(bugprone-unchecked-optional-access)
   ASSERT_EQ(result.status, mk::net::FrameStatus::kOk);
-  EXPECT_EQ(result.frame_size, *written);  // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_EQ(result.frame_size, *written);
   ASSERT_EQ(result.payload.size(), 5U);
   EXPECT_EQ(std::memcmp(result.payload.data(), text, 5), 0);
 }
@@ -61,10 +64,12 @@ TEST(LengthPrefixCodecTest, EmptyPayload) {
 
   const auto written = mk::net::encode_length_prefix_frame(buf, empty);
   ASSERT_TRUE(written.has_value());
-  EXPECT_EQ(*written, mk::net::kLengthPrefixSize);  // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_EQ(*written, mk::net::kLengthPrefixSize);
 
-  const auto result = mk::net::decode_length_prefix_frame(
-      std::span<const std::byte>{buf}.first(*written));  // NOLINT(bugprone-unchecked-optional-access)
+  const auto result =
+      mk::net::decode_length_prefix_frame(std::span<const std::byte>{buf}.first(
+          *written)); // NOLINT(bugprone-unchecked-optional-access)
   ASSERT_EQ(result.status, mk::net::FrameStatus::kOk);
   EXPECT_EQ(result.frame_size, mk::net::kLengthPrefixSize);
   EXPECT_TRUE(result.payload.empty());
@@ -82,10 +87,12 @@ TEST(LengthPrefixCodecTest, MaxFrameSizeSucceeds) {
 
   const auto written = mk::net::encode_length_prefix_frame(buf, payload);
   ASSERT_TRUE(written.has_value());
-  EXPECT_EQ(*written, mk::net::kDefaultMaxFrameSize);  // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_EQ(*written, mk::net::kDefaultMaxFrameSize);
 
-  const auto result = mk::net::decode_length_prefix_frame(
-      std::span<const std::byte>{buf}.first(*written));  // NOLINT(bugprone-unchecked-optional-access)
+  const auto result =
+      mk::net::decode_length_prefix_frame(std::span<const std::byte>{buf}.first(
+          *written)); // NOLINT(bugprone-unchecked-optional-access)
   ASSERT_EQ(result.status, mk::net::FrameStatus::kOk);
   EXPECT_EQ(result.payload.size(), max_payload);
 }
@@ -207,7 +214,8 @@ TEST(LengthPrefixCodecTest, PayloadIsZeroCopyView) {
   const auto written = mk::net::encode_length_prefix_frame(buf, payload);
   ASSERT_TRUE(written.has_value());
 
-  const auto view = std::span<const std::byte>{buf}.first(*written);  // NOLINT(bugprone-unchecked-optional-access)
+  const auto view = std::span<const std::byte>{buf}.first(
+      *written); // NOLINT(bugprone-unchecked-optional-access)
   const auto result = mk::net::decode_length_prefix_frame(view);
   ASSERT_EQ(result.status, mk::net::FrameStatus::kOk);
 
@@ -230,11 +238,13 @@ TEST(LengthPrefixCodecTest, MultipleFramesSequential) {
   ASSERT_TRUE(w1.has_value());
 
   auto w2 = mk::net::encode_length_prefix_frame(
-      std::span<std::byte>{buf}.subspan(*w1),  // NOLINT(bugprone-unchecked-optional-access)
+      std::span<std::byte>{buf}.subspan(
+          *w1), // NOLINT(bugprone-unchecked-optional-access)
       std::as_bytes(std::span{msg2, 5}));
   ASSERT_TRUE(w2.has_value());
 
-  const std::size_t total = *w1 + *w2;  // NOLINT(bugprone-unchecked-optional-access)
+  const std::size_t total =
+      *w1 + *w2; // NOLINT(bugprone-unchecked-optional-access)
   auto all = std::span<const std::byte>{buf}.first(total);
 
   // Decode first frame.
@@ -268,14 +278,16 @@ TEST(LengthPrefixCodecTest, TrailingBytesTolerated) {
   ASSERT_TRUE(written.has_value());
 
   // Fill trailing area with garbage.
-  std::fill(buf.begin() + static_cast<std::ptrdiff_t>(*written), buf.end(),  // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  std::fill(buf.begin() + static_cast<std::ptrdiff_t>(*written), buf.end(),
             std::byte{0xFF});
 
   // Pass entire buffer (frame + garbage).
   auto result =
       mk::net::decode_length_prefix_frame(std::span<const std::byte>{buf});
   ASSERT_EQ(result.status, mk::net::FrameStatus::kOk);
-  EXPECT_EQ(result.frame_size, *written);  // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_EQ(result.frame_size, *written);
   ASSERT_EQ(result.payload.size(), 3U);
   EXPECT_EQ(std::memcmp(result.payload.data(), text, 3), 0);
 }
@@ -294,7 +306,8 @@ TEST(LengthPrefixCodecTest, CustomMaxFrameSize) {
   auto written =
       mk::net::encode_length_prefix_frame(buf, small_payload, kSmallMax);
   ASSERT_TRUE(written.has_value());
-  EXPECT_EQ(*written, mk::net::kLengthPrefixSize + 20);  // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_EQ(*written, mk::net::kLengthPrefixSize + 20);
 
   // Payload that exceeds custom max → rejected.
   std::array<std::byte, 30> big_payload{};
@@ -303,11 +316,15 @@ TEST(LengthPrefixCodecTest, CustomMaxFrameSize) {
 
   // Decode with the same custom max.
   auto result = mk::net::decode_length_prefix_frame(
-      std::span<const std::byte>{buf}.first(*written), kSmallMax);  // NOLINT(bugprone-unchecked-optional-access)
+      std::span<const std::byte>{buf}.first(
+          *written), // NOLINT(bugprone-unchecked-optional-access)
+      kSmallMax);
   ASSERT_EQ(result.status, mk::net::FrameStatus::kOk);
 
   // Decode with a smaller max → kError.
   auto result2 = mk::net::decode_length_prefix_frame(
-      std::span<const std::byte>{buf}.first(*written), 16);  // NOLINT(bugprone-unchecked-optional-access)
+      std::span<const std::byte>{buf}.first(
+          *written), // NOLINT(bugprone-unchecked-optional-access)
+      16);
   EXPECT_EQ(result2.status, mk::net::FrameStatus::kError);
 }

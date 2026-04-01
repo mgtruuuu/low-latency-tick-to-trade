@@ -18,7 +18,6 @@
 
 #include <array>
 #include <cstddef>
-#include <cstdint>
 
 // ============================================================================
 // 1. write_u32_be known value

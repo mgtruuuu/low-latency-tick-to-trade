@@ -141,9 +141,8 @@ TEST(FixedLatencyRecorderTest, LargeVolume) {
 
 TEST(FixedLatencyRecorderTest, HistogramTypeAlias) {
   // Verify the Histogram type alias is correct.
-  static_assert(
-      std::is_same_v<Recorder3::Histogram,
-                     mk::ds::FixedLatencyHistogram<64, 10>>);
+  static_assert(std::is_same_v<Recorder3::Histogram,
+                               mk::ds::FixedLatencyHistogram<64, 10>>);
 }
 
 // ---------------------------------------------------------------------------

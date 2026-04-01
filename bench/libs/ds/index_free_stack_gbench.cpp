@@ -52,14 +52,14 @@ void BM_Fixed_Pop(benchmark::State &state) {
   FixedIndexFreeStack<kCapacity> stack;
   std::array<std::uint32_t, kBatch> popped{};
 
-  std::size_t idx = 0;
+  std::size_t count = 0;
   for (auto _ : state) {
-    auto opt = stack.pop();
-    benchmark::DoNotOptimize(opt);
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-    popped[idx % kBatch] = *opt;
-    ++idx;
-    if (idx % kBatch == 0) {
+    std::uint32_t val = 0;
+    (void)stack.pop(val);
+    benchmark::DoNotOptimize(val);
+    popped[count % kBatch] = val;
+    ++count;
+    if (count % kBatch == 0) {
       state.PauseTiming();
       for (std::size_t j = 0; j < kBatch; ++j) {
         stack.push(popped[j]);
@@ -80,19 +80,17 @@ void BM_Fixed_Push(benchmark::State &state) {
 
   // Pre-pop initial batch.
   for (std::size_t j = 0; j < kBatch; ++j) {
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-    popped[j] = *stack.pop();
+    (void)stack.pop(popped[j]);
   }
 
-  std::size_t idx = 0;
+  std::size_t count = 0;
   for (auto _ : state) {
-    stack.push(popped[idx % kBatch]);
-    ++idx;
-    if (idx % kBatch == 0) {
+    stack.push(popped[count % kBatch]);
+    ++count;
+    if (count % kBatch == 0) {
       state.PauseTiming();
       for (std::size_t j = 0; j < kBatch; ++j) {
-        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-        popped[j] = *stack.pop();
+        (void)stack.pop(popped[j]);
       }
       state.ResumeTiming();
     }
@@ -106,9 +104,9 @@ void BM_Fixed_PopPush(benchmark::State &state) {
   FixedIndexFreeStack<kCapacity> stack;
 
   for (auto _ : state) {
-    auto idx = stack.pop();
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-    stack.push(*idx);
+    std::uint32_t idx = 0;
+    (void)stack.pop(idx);
+    stack.push(idx);
     benchmark::DoNotOptimize(idx);
   }
 }
@@ -129,14 +127,14 @@ void BM_Runtime_Pop(benchmark::State &state) {
   auto stack = IndexFreeStack::create(buf, kBufSize, kCapacity).value();
   std::array<std::uint32_t, kBatch> popped{};
 
-  std::size_t idx = 0;
+  std::size_t count = 0;
   for (auto _ : state) {
-    auto opt = stack.pop();
-    benchmark::DoNotOptimize(opt);
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-    popped[idx % kBatch] = *opt;
-    ++idx;
-    if (idx % kBatch == 0) {
+    std::uint32_t val = 0;
+    (void)stack.pop(val);
+    benchmark::DoNotOptimize(val);
+    popped[count % kBatch] = val;
+    ++count;
+    if (count % kBatch == 0) {
       state.PauseTiming();
       for (std::size_t j = 0; j < kBatch; ++j) {
         stack.push(popped[j]);
@@ -157,19 +155,17 @@ void BM_Runtime_Push(benchmark::State &state) {
   std::array<std::uint32_t, kBatch> popped{};
 
   for (std::size_t j = 0; j < kBatch; ++j) {
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-    popped[j] = *stack.pop();
+    (void)stack.pop(popped[j]);
   }
 
-  std::size_t idx = 0;
+  std::size_t count = 0;
   for (auto _ : state) {
-    stack.push(popped[idx % kBatch]);
-    ++idx;
-    if (idx % kBatch == 0) {
+    stack.push(popped[count % kBatch]);
+    ++count;
+    if (count % kBatch == 0) {
       state.PauseTiming();
       for (std::size_t j = 0; j < kBatch; ++j) {
-        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-        popped[j] = *stack.pop();
+        (void)stack.pop(popped[j]);
       }
       state.ResumeTiming();
     }
@@ -185,9 +181,9 @@ void BM_Runtime_PopPush(benchmark::State &state) {
   auto stack = IndexFreeStack::create(buf, kBufSize, kCapacity).value();
 
   for (auto _ : state) {
-    auto idx = stack.pop();
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-    stack.push(*idx);
+    std::uint32_t idx = 0;
+    (void)stack.pop(idx);
+    stack.push(idx);
     benchmark::DoNotOptimize(idx);
   }
 }

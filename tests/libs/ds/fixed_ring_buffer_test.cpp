@@ -6,7 +6,6 @@
 #include "ds/fixed_ring_buffer.hpp"
 
 #include <numeric>
-#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>

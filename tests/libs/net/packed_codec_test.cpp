@@ -77,10 +77,11 @@ TEST(PackedCodecTest, RoundTripSimpleMsg) {
   auto parsed = mk::net::unpack_struct<SimpleMsg>(buf);
   ASSERT_TRUE(parsed.has_value());
 
-  EXPECT_EQ(parsed->id, 42U);           // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(parsed->price, -12345678);  // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(parsed->qty, 100U);         // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(parsed->side, 1U);          // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(parsed->id, 42U); // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_EQ(parsed->price, -12345678);
+  EXPECT_EQ(parsed->qty, 100U); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(parsed->side, 1U);  // NOLINT(bugprone-unchecked-optional-access)
 }
 
 TEST(PackedCodecTest, RoundTripTinyMsg) {

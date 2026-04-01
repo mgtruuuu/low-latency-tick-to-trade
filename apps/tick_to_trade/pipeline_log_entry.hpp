@@ -1,23 +1,23 @@
 /**
- * @file async_log_entry.hpp
- * @brief Fixed-size binary log entry for the async logger.
+ * @file pipeline_log_entry.hpp
+ * @brief Fixed-size binary log entry for the tick-to-trade pipeline logger.
  *
  * LogEntry is a 128-byte tagged union designed for zero-allocation hot-path
  * logging via SPSCQueue. Binary on the hot path — text formatting is deferred
  * to the logger thread (cold path).
  *
- * HFT context:
- *   Industry standard: hot threads push binary structs into SPSC queues.
- *   A dedicated logger thread drains and converts to text/binary log files.
- *   This avoids string formatting overhead (~100-500ns) on the critical path.
+ * This is the application-specific entry type for tick_to_trade. The generic
+ * drain loop infrastructure lives in libs/sys/log/async_drain_loop.hpp.
  */
 
 #pragma once
 
+#include "sys/memory/spsc_queue.hpp"
+
 #include <cstdint>
 #include <type_traits>
 
-namespace mk::sys::log {
+namespace mk::app {
 
 /// Log severity level.
 enum class LogLevel : std::uint8_t {
@@ -78,11 +78,11 @@ enum class ConnectionEvent : std::uint8_t {
 ///   At 4096 queue capacity: 4096 * 128 = 512KB per queue — fits in L2 cache.
 struct LogEntry {
   // -- Header (16 bytes) --
-  std::uint64_t tsc_timestamp{0};  // rdtsc() at log site
-  std::uint16_t thread_id{0};     // Logical thread ID (see kThreadId* below)
+  std::uint64_t tsc_timestamp{0}; // rdtsc() at log site
+  std::uint16_t thread_id{0};    // Logical thread ID (see kThreadId* below)
   LogLevel level{LogLevel::kInfo};
   LogEventType event_type{LogEventType::kText}; // Union discriminator
-  std::uint8_t pad_[4]{};         // Align payload to 16-byte boundary
+  std::uint8_t pad_[4]{};        // Align payload to 16-byte boundary
 
   // -- Payload (112 bytes) — tagged union --
   // C++ rule: a union may have at most ONE member with a default member
@@ -109,7 +109,7 @@ struct LogEntry {
       std::int64_t price;
       std::uint32_t qty;
       std::uint32_t remaining_qty;
-      std::int64_t send_ts;        // monotonic_nanos at order send
+      std::int64_t send_ts; // monotonic_nanos at order send
     } order; // 48 bytes used
 
     // kMarketData: market data event
@@ -120,15 +120,15 @@ struct LogEntry {
       std::uint8_t reserved[3];
       std::int64_t price;
       std::uint32_t qty;
-      std::uint32_t gap_size;      // Non-zero if gap detected
+      std::uint32_t gap_size; // Non-zero if gap detected
     } market_data; // 32 bytes used
 
     // kConnection: TCP connection lifecycle
     struct {
       ConnectionEvent sub_type;
       std::uint8_t reserved[3];
-      std::uint32_t attempt;       // Reconnect attempt number
-      std::int64_t rtt_ns;         // Heartbeat RTT in nanoseconds
+      std::uint32_t attempt;  // Reconnect attempt number
+      std::int64_t rtt_ns;    // Heartbeat RTT in nanoseconds
     } connection; // 16 bytes used
 
     // kText: generic text message (cold-path diagnostic)
@@ -150,4 +150,7 @@ inline constexpr std::uint16_t kThreadIdMd = 1;
 inline constexpr std::uint16_t kThreadIdStrategy = 2;
 inline constexpr std::uint16_t kThreadIdLogger = 3;
 
-} // namespace mk::sys::log
+/// Queue type alias for pipeline logging.
+using PipelineLogQueue = mk::sys::memory::SPSCQueue<LogEntry>;
+
+} // namespace mk::app

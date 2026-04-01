@@ -4,8 +4,9 @@
  *
  * Provides:
  *   - mix64()            — MurmurHash3 finalizer (bit avalanche mixer)
- *   - hash_combine_u64() — Boost-style golden-ratio seed combiner
+ *   - SplitMix64         — Canonical SplitMix64 PRNG / sequential key mixer
  *   - finalize_hash()    — Final mix64 pass for composite key hashers
+ *   - hash_combine_u64() — Boost-style golden-ratio seed combiner
  *   - fnv1a_hash()       — FNV-1a: deterministic byte-buffer hash
  *   - DefaultHash<Key>   — Integer-aware hasher (mix64 for ints, std::hash +
  *                          mix64 for others)
@@ -34,7 +35,8 @@ namespace mk::ds {
 // =============================================================================
 //
 // Bijective 64-bit → 64-bit mixer. Every input bit affects every output bit
-// (full avalanche). Used by MurmurHash3, splitmix64, and most modern hash maps.
+// (full avalanche). Used by MurmurHash3 finalization and as a standalone
+// avalanche mixer in hash tables and bloom-filter probe derivation.
 //
 // The magic constants and shift amounts were found by Austin Appleby through
 // extensive statistical testing to minimize bias in the output distribution.
@@ -51,7 +53,51 @@ namespace mk::ds {
 }
 
 // =============================================================================
-// 2. finalize_hash — Final mix64 pass for composite key hashers
+// 2. SplitMix64 — Canonical SplitMix64 PRNG / sequential key mixer
+// =============================================================================
+//
+// Canonical SplitMix64 sequence:
+//   state += gamma
+//   z = state
+//   z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9
+//   z = (z ^ (z >> 27)) * 0x94D049BB133111EB
+//   z = z ^ (z >> 31)
+//
+// Used for two purposes:
+//
+//   1. **Bloom filter probe expansion**: produce k probe indices from a single
+//      seed by calling next() repeatedly (single-seed PRNG expansion).
+//      Each call advances the state and mixes, yielding independent-looking
+//      indices without computing k separate hash functions.
+//      Note: this is distinct from Kirsch–Mitzenmacher double-hashing
+//      (h1 + i*h2), which uses two independent base hashes.
+//
+//   2. **Fast PRNG**: SplitMix64 passes BigCrush and
+//      is the default seed mixer in java.util.SplittableRandom.
+//
+// Note: SplitMix64 uses a different output permutation from our mix64()
+// helper above. The names are intentionally separate to avoid conflating the
+// MurmurHash3 finalizer with canonical SplitMix64 constants.
+//
+// Cost: 1 add + 2 multiplies + 3 XOR-shifts ≈ a few ns on modern x86.
+
+struct SplitMix64 {
+  std::uint64_t state;
+
+  explicit constexpr SplitMix64(std::uint64_t seed) noexcept : state{seed} {}
+
+  [[nodiscard]] constexpr std::uint64_t next() noexcept {
+    state += 0x9E3779B97F4A7C15ULL; // gamma = 2^64 / phi
+
+    std::uint64_t z = state;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+  }
+};
+
+// =============================================================================
+// 3. finalize_hash — Final mix64 pass for composite key hashers
 // =============================================================================
 //
 // Thin wrapper around mix64 for use at the end of a composite hash computation.
@@ -79,7 +125,7 @@ namespace mk::ds {
 }
 
 // =============================================================================
-// 3. hash_combine_u64 — Boost golden-ratio combiner
+// 4. hash_combine_u64 — Boost golden-ratio combiner
 // =============================================================================
 //
 // Combines a new hash value into an existing seed. The golden-ratio constant
@@ -97,7 +143,7 @@ constexpr void hash_combine_u64(std::size_t &seed, std::size_t v) noexcept {
 }
 
 // =============================================================================
-// 4. fnv1a_hash — FNV-1a deterministic byte-buffer hash
+// 5. fnv1a_hash — FNV-1a deterministic byte-buffer hash
 // =============================================================================
 //
 // Deterministic, cross-platform hash for short byte sequences (<= ~64 bytes).
@@ -124,7 +170,7 @@ fnv1a_hash(std::span<const std::byte> data) noexcept {
 }
 
 // =============================================================================
-// 5. DefaultHash<Key> — Integer-aware hasher
+// 6. DefaultHash<Key> — Integer-aware hasher
 // =============================================================================
 //
 // For integral types: applies finalize_hash (avoids identity-hash problem).
@@ -155,7 +201,7 @@ template <class Key> struct DefaultHash {
 };
 
 // =============================================================================
-// 6. SlotState — open-addressing slot state
+// 7. SlotState — open-addressing slot state
 // =============================================================================
 //
 // Shared by FixedHashMap (inline storage) and HashMap (external buffer).

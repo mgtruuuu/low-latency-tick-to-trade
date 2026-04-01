@@ -137,11 +137,12 @@ class IndexFreeStack {
   // Private constructor (used by create() factory)
   // ===========================================================================
 
-  IndexFreeStack(std::uint32_t *indices,
+  IndexFreeStack(std::uint32_t *indices, std::uint32_t cap
 #ifndef NDEBUG
-                 bool *in_use,
+                 ,
+                 bool *in_use
 #endif
-                 std::uint32_t cap) noexcept
+                 ) noexcept
       : indices_(indices), capacity_(cap)
 #ifndef NDEBUG
         ,
@@ -201,11 +202,12 @@ public:
       return std::nullopt;
     }
 
-    auto stack = IndexFreeStack(indices,
+    auto stack = IndexFreeStack(indices, static_cast<std::uint32_t>(capacity)
 #ifndef NDEBUG
-                                in_use,
+                                             ,
+                                in_use
 #endif
-                                static_cast<std::uint32_t>(capacity));
+    );
     stack.init_storage();
     return stack;
   }
@@ -280,16 +282,17 @@ public:
   // Core operations (same API as FixedIndexFreeStack)
   // ===========================================================================
 
-  /// Pop the next available index. Returns nullopt if empty.
-  [[nodiscard]] std::optional<std::uint32_t> pop() noexcept {
+  /// Pop the next available index into `out`. Returns false if empty.
+  /// Same pattern as SPSCQueue::try_pop() — no std::optional on the hot path.
+  [[nodiscard]] bool pop(std::uint32_t &out) noexcept {
     if (top_ == 0) [[unlikely]] {
-      return std::nullopt;
+      return false;
     }
-    auto idx = indices_[--top_];
+    out = indices_[--top_];
 #ifndef NDEBUG
-    in_use_[idx] = true;
+    in_use_[out] = true;
 #endif
-    return idx;
+    return true;
   }
 
   /// Return an index to the pool.

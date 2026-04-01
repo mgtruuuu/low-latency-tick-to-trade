@@ -62,8 +62,7 @@ public:
                       std::uint64_t &shared_seq, const sockaddr_in &feed_a_dest,
                       const sockaddr_in *feed_b_dest = nullptr) noexcept
       : sock_{sock}, symbol_id_{symbol_id}, shared_seq_{shared_seq},
-        feed_a_dest_{feed_a_dest}, feed_b_dest_{feed_b_dest} {
-  }
+        feed_a_dest_{feed_a_dest}, feed_b_dest_{feed_b_dest} {}
 
   /// Publish a pair of bid/ask market data updates (2 UDP datagrams).
   /// Called periodically from the exchange's main loop.
@@ -71,40 +70,26 @@ public:
     const auto [bid_price, bid_qty, ask_price, ask_qty] = generate_quotes();
     const std::int64_t now = sys::monotonic_nanos();
 
-    publish_update(algo::Side::kBid, bid_price, bid_qty, now);
-    publish_update(algo::Side::kAsk, ask_price, ask_qty, now);
+    send_datagram(MdMsgType::kBBOUpdate, algo::Side::kBid, bid_price, bid_qty,
+                  now);
+    send_datagram(MdMsgType::kBBOUpdate, algo::Side::kAsk, ask_price, ask_qty,
+                  now);
   }
 
   /// Publish a trade event (after a fill occurs in the matching engine).
-  /// Updates the mid-price to reflect the trade.
+  /// Sends 1 Trade datagram with the execution price/qty.
   void publish_trade(algo::Side aggressor_side, algo::Price trade_price,
                      algo::Qty trade_qty) noexcept {
-    // Shift mid-price toward trade price (market impact).
-    mid_price_ = (mid_price_ + trade_price) / 2;
-
-    const std::int64_t now = sys::monotonic_nanos();
-
-    // Publish updated bid/ask reflecting the trade.
-    const algo::Price bid_price = mid_price_ - kHalfSpread;
-    const algo::Price ask_price = mid_price_ + kHalfSpread;
-
-    publish_update(aggressor_side, trade_price, trade_qty, now);
-
-    // Also publish updated opposite side.
-    const auto other_side = (aggressor_side == algo::Side::kBid)
-                                ? algo::Side::kAsk
-                                : algo::Side::kBid;
-    const algo::Price other_price =
-        (other_side == algo::Side::kBid) ? bid_price : ask_price;
-    const auto other_qty = static_cast<algo::Qty>(100 + (rng_() % 901));
-    publish_update(other_side, other_price, other_qty, now);
+    send_datagram(MdMsgType::kTrade, aggressor_side, trade_price, trade_qty,
+                  sys::monotonic_nanos());
   }
 
-  /// Publish a single market data update (1 UDP datagram).
-  /// Public so OrderGateway can publish real BBO from the OrderBook.
+  /// Publish a single BBO update (1 UDP datagram).
+  /// Called by the event dispatch loop for BBO updates after fills.
   void publish_update(algo::Side side, algo::Price price,
                       algo::Qty qty) noexcept {
-    publish_update(side, price, qty, sys::monotonic_nanos());
+    send_datagram(MdMsgType::kBBOUpdate, side, price, qty,
+                  sys::monotonic_nanos());
   }
 
   [[nodiscard]] std::uint64_t seq_num() const noexcept { return shared_seq_; }
@@ -121,8 +106,7 @@ private:
 
   UdpSock &sock_;
   std::uint32_t symbol_id_;
-  std::uint64_t
-      &shared_seq_;
+  std::uint64_t &shared_seq_;
   sockaddr_in feed_a_dest_;
   const sockaddr_in *feed_b_dest_; // nullptr = no Feed B
   algo::Price ref_price_{kDefaultRefPrice};
@@ -162,11 +146,12 @@ private:
             .ask_qty = static_cast<algo::Qty>(100 + (rng_() % 901))};
   }
 
-  void publish_update(algo::Side side, algo::Price price, algo::Qty qty,
-                      std::int64_t ts) noexcept {
+  void send_datagram(MdMsgType msg_type, algo::Side side, algo::Price price,
+                     algo::Qty qty, std::int64_t ts) noexcept {
     const MarketDataUpdate md{
         .seq_num = shared_seq_++,
         .symbol_id = symbol_id_,
+        .md_msg_type = msg_type,
         .side = side,
         .price = price,
         .qty = qty,

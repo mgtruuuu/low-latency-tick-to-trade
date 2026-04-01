@@ -157,10 +157,12 @@ struct RawFramer {
   // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
   decode(std::span<const std::byte> buf) const noexcept {
     if (buf.empty()) {
-      return {.status = FrameStatus::kIncomplete, .frame_size = 0, .payload = {}};
+      return {
+          .status = FrameStatus::kIncomplete, .frame_size = 0, .payload = {}};
     }
     // Treat the entire buffer as one complete frame.
-    return {.status = FrameStatus::kOk, .frame_size = buf.size(), .payload = buf};
+    return {
+        .status = FrameStatus::kOk, .frame_size = buf.size(), .payload = buf};
   }
 
   [[nodiscard]] std::size_t
@@ -411,8 +413,8 @@ class TcpServer {
     s.tx_size = 0;
     s.tx_sent = 0;
     s.peer_rd_closed = false;
-    s.rx_buf = rx_region_ + static_cast<std::size_t>(fd) * kRxBufSize;
-    s.tx_buf = tx_region_ + static_cast<std::size_t>(fd) * kTxBufSize;
+    s.rx_buf = rx_region_ + (static_cast<std::size_t>(fd) * kRxBufSize);
+    s.tx_buf = tx_region_ + (static_cast<std::size_t>(fd) * kTxBufSize);
   }
 
   void release_slot(int fd) noexcept {
@@ -459,8 +461,8 @@ class TcpServer {
       // response payload. Uses a dedicated member buffer (scratch_buf_)
       // so that response capacity is always kTxBufSize, independent of
       // how full the rx_buf is.
-      auto tx_space = std::as_writable_bytes(
-          std::span{scratch_, kScratchBytes});
+      auto tx_space =
+          std::as_writable_bytes(std::span{scratch_, kScratchBytes});
 
       const std::size_t resp_len =
           handler_.on_data(static_cast<ConnId>(s.fd), result.payload, tx_space);
@@ -473,8 +475,7 @@ class TcpServer {
               " resp_len=", resp_len, " cap=", tx_space.size(), '\n');
           return kFrameError;
         }
-        auto resp_payload =
-            std::as_bytes(std::span{scratch_, resp_len});
+        auto resp_payload = std::as_bytes(std::span{scratch_, resp_len});
         auto out = std::as_writable_bytes(
             std::span{s.tx_buf + s.tx_size, kTxBufSize - s.tx_size});
         const std::size_t encoded = framer_.encode(out, resp_payload);
@@ -662,8 +663,8 @@ class TcpServer {
 
       // accept4: atomically sets NONBLOCK + CLOEXEC (one syscall).
       const int fd = accept4(listen_sock_.get(),
-                       reinterpret_cast<struct sockaddr *>(&clnt_adr), &adr_sz,
-                       SOCK_NONBLOCK | SOCK_CLOEXEC);
+                             reinterpret_cast<struct sockaddr *>(&clnt_adr),
+                             &adr_sz, SOCK_NONBLOCK | SOCK_CLOEXEC);
 
       if (fd == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -705,7 +706,7 @@ class TcpServer {
       }
 
       alloc_slot(fd);
-      ConnSlot  const&s = slots_[fd];
+      ConnSlot const &s = slots_[fd];
 
       // Let handler decide whether to accept this connection.
       if (!handler_.on_connect(static_cast<ConnId>(fd))) {

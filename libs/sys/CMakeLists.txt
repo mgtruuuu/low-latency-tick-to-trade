@@ -48,7 +48,6 @@ if(CMAKE_CXX_FLAGS MATCHES "-fsanitize=")
         memory/mmap_region.cpp
         thread/hot_path_control.cpp
         thread/affinity.cpp
-        log/async_logger.cpp
     )
 else()
     set(MK_SYS_SOURCES
@@ -57,7 +56,6 @@ else()
         memory/mmap_region.cpp
         thread/hot_path_control.cpp
         thread/affinity.cpp
-        log/async_logger.cpp
     )
 endif()
 

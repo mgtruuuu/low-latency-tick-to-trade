@@ -32,8 +32,8 @@
 #include "net/scoped_fd.hpp"
 #include "net/tcp_socket.hpp"
 
-#include "sys/log/async_logger.hpp"
-#include "sys/log/log_macros.hpp"
+#include "pipeline_log_push.hpp"
+
 #include "sys/log/signal_logger.hpp"
 #include "sys/nano_clock.hpp"
 #include "sys/thread/affinity.hpp"
@@ -85,7 +85,7 @@ public:
     std::int32_t pin_core{-1};
     std::int64_t stats_interval_ns{0};
     // Logging
-    sys::log::LogQueue &log_queue;
+    PipelineLogQueue &log_queue;
   };
 
   explicit StrategyThread(const Config &cfg) noexcept
@@ -218,17 +218,17 @@ private:
           }
           conn_.last_hb_sent = now;
           conn_.heartbeats_sent.fetch_add(1, std::memory_order_relaxed);
-          (void)sys::log::log_connection(
-              log_queue_, sys::log::kThreadIdStrategy,
-              sys::log::LogLevel::kDebug,
-              sys::log::ConnectionEvent::kHeartbeatSent);
+          (void)log_connection(
+              log_queue_, kThreadIdStrategy,
+              LogLevel::kDebug,
+              ConnectionEvent::kHeartbeatSent);
         }
 
         if (now - conn_.last_hb_recv >= kHeartbeatTimeoutNs) [[unlikely]] {
-          (void)sys::log::log_connection(
-              log_queue_, sys::log::kThreadIdStrategy,
-              sys::log::LogLevel::kWarn,
-              sys::log::ConnectionEvent::kDisconnect);
+          (void)log_connection(
+              log_queue_, kThreadIdStrategy,
+              LogLevel::kWarn,
+              ConnectionEvent::kDisconnect);
           disconnect_and_reconnect(tcp_sock_, epoll_, conn_, tcp_rx_read_,
                                    tcp_rx_write_,
                                    "Heartbeat timeout — reconnecting");
@@ -355,9 +355,9 @@ private:
           if (t_dequeue > t0) {
             const auto hop_cycles = t_dequeue - t0;
             tracker_.record_queue_latency(hop_cycles);
-            (void)sys::log::log_latency(
-                log_queue_, sys::log::kThreadIdStrategy,
-                sys::log::LatencyStage::kQueueHop, hop_cycles, t0);
+            (void)log_latency(
+                log_queue_, kThreadIdStrategy,
+                LatencyStage::kQueueHop, hop_cycles, t0);
           }
 
           // Record pure queue wait (t_drain - t0).
@@ -377,9 +377,9 @@ private:
             auto t2 = sys::rdtsc();
             auto strat_cycles = t2 - t_dequeue;
             tracker_.record_strategy(strat_cycles);
-            (void)sys::log::log_latency(
-                log_queue_, sys::log::kThreadIdStrategy,
-                sys::log::LatencyStage::kStrategy, strat_cycles, t0);
+            (void)log_latency(
+                log_queue_, kThreadIdStrategy,
+                LatencyStage::kStrategy, strat_cycles, t0);
           }
 #endif
 
@@ -537,7 +537,7 @@ private:
   std::atomic_flag &kill_switch_flag_;
   std::int32_t pin_core_;
   std::int64_t stats_interval_ns_;
-  sys::log::LogQueue &log_queue_;
+  PipelineLogQueue &log_queue_;
 
   // -- Loop-local state (owned — formerly local variables) --
   std::size_t tcp_rx_read_{0};

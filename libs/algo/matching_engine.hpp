@@ -25,7 +25,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
+#include <utility> // std::move, std::swap
 
 namespace mk::algo {
 
@@ -47,23 +49,40 @@ struct Fill {
 /// Outcome of a submit_order() call.
 ///
 /// Lifetime: `fills` is a span into the engine's internal buffer. It is
-/// valid only until the next call to submit_order() on the same engine
-/// instance — the buffer is overwritten each time. Process fills before
-/// submitting the next order. This is the standard HFT pattern (analogous
-/// to epoll_wait's event buffer).
+/// valid only until the next call to submit_order() or modify_order() on
+/// the same engine instance — the buffer is overwritten each time. Moving
+/// or swapping the engine also invalidates any outstanding span (fills_
+/// is swapped to a different object). Process fills before any of these
+/// operations. This is the standard HFT pattern (analogous to
+/// epoll_wait's event buffer).
 ///
-/// Outcome decoding (all cases distinguishable from these fields):
-///   Fully filled:          remaining_qty == 0, rested == false, !fills.empty()
-///   Partial fill + rested: remaining_qty > 0,  rested == true
-///   No match, rested:      remaining_qty > 0,  rested == true,  fills.empty()
-///   Zero-qty rejected:     remaining_qty == 0, rested == false, fills.empty()
-///   Duplicate ID rejected: remaining_qty > 0,  rested == false, fills.empty()
-///   Book full (can't rest): remaining_qty > 0, rested == false
-///   Fill buffer exhausted:  remaining_qty > 0, rested == false, !fills.empty()
+// clang-format off
+/// Observable outcomes (fills, remaining_qty, rested):
+///   !empty, remaining == 0, !rested → fully filled
+///   !empty, remaining >  0,  rested → partial fill, rested
+///   !empty, remaining >  0, !rested → partial fill, NOT rested
+///    empty, remaining >  0,  rested → no match, rested
+///    empty, remaining >  0, !rested → no fill, not rested
+///    empty, remaining == 0, !rested → zero-qty (rejected)
+///
+/// Root causes NOT distinguishable from fields alone:
+///   "no fill, not rested" → duplicate ID or book full.
+///   "partial fill, NOT rested" → buffer exhaustion or book full.
+// clang-format on
 struct MatchResult {
   std::span<const Fill> fills; ///< Fills generated (volatile — see above).
   Qty remaining_qty{0};        ///< Unfilled portion (0 = fully filled).
   bool rested{false};          ///< True if remainder was rested in the book.
+
+  // Helpers — decode the 3-field combination without memorizing the table.
+  [[nodiscard]] bool has_fills() const noexcept { return !fills.empty(); }
+  [[nodiscard]] bool fully_filled() const noexcept {
+    return !fills.empty() && remaining_qty == 0 && !rested;
+  }
+  [[nodiscard]] bool rested_in_book() const noexcept { return rested; }
+  [[nodiscard]] bool rejected() const noexcept {
+    return fills.empty() && !rested;
+  }
 };
 
 // =============================================================================
@@ -73,44 +92,108 @@ struct MatchResult {
 /// Outcome of a modify_order() call (cancel + re-submit).
 ///
 /// Lifetime: same as MatchResult — `fills` span is valid only until the
-/// next submit_order() or modify_order() call (shares the same fill buffer).
+/// next submit_order(), modify_order(), move, or swap (shares the same
+/// fill buffer).
+///
+// clang-format off
+/// Outcome decoding:
+///   success == false: original order not found (cancel failed).
+///   success == true:  cancel succeeded, replacement went through submit_order().
+///                     Observable outcomes same as MatchResult above.
+// clang-format on
 struct ModifyResult {
   std::span<const Fill> fills; ///< Fills if new price crosses opposite side.
   Qty remaining_qty{0};        ///< Unfilled portion after re-submission.
   bool rested{false};          ///< True if remainder was rested in the book.
   bool success{false};         ///< False if original order was not found.
+
+  [[nodiscard]] bool rested_in_book() const noexcept {
+    return success && rested;
+  }
 };
 
 // =============================================================================
 // MatchingEngine
 // =============================================================================
 //
-// Template parameters mirror OrderBook plus MaxFills (max fills per match).
-// The fills buffer is a fixed array — no allocation during matching.
+// MaxFills is the only remaining template parameter (controls inline fill
+// buffer size). OrderBook capacity is runtime via OrderBook::Params.
 
-template <std::size_t MaxFills = 64, std::size_t MaxOrders = 65536,
-          std::size_t MaxLevels = 4096, std::size_t OrderMapCap = 65536,
-          std::size_t LevelMapCap = 8192>
-class MatchingEngine {
+template <std::size_t MaxFills = 64> class MatchingEngine {
+  // ---------------------------------------------------------------------------
+  // Data members
+  // ---------------------------------------------------------------------------
+  OrderBook book_;
+  std::array<Fill, MaxFills> fills_{};
+  std::uint32_t fill_count_{0};
+
 public:
   static constexpr std::size_t kMaxFillsPerMatch = MaxFills;
-  using Book = OrderBook<MaxOrders, MaxLevels, OrderMapCap, LevelMapCap>;
+  using Book = OrderBook;
 
-  MatchingEngine() = default;
+  /// Forward OrderBook::required_buffer_size for caller convenience.
+  [[nodiscard]] static constexpr std::size_t
+  required_buffer_size(const OrderBook::Params &params) noexcept {
+    return OrderBook::required_buffer_size(params);
+  }
+
+  /// Factory — returns std::optional<MatchingEngine>.
+  [[nodiscard]] static std::optional<MatchingEngine>
+  create(void *buf, std::size_t buf_bytes,
+         const OrderBook::Params &params) noexcept {
+    auto book = OrderBook::create(buf, buf_bytes, params);
+    if (!book) {
+      return std::nullopt;
+    }
+    return MatchingEngine(std::move(*book));
+  }
+
+  /// Default constructor — empty engine (OrderBook is default-constructed,
+  /// unusable). Exists for default-initialized arrays / two-phase patterns.
+  MatchingEngine() noexcept = default;
+
+  /// Construct from a ready OrderBook (takes ownership via move).
+  explicit MatchingEngine(OrderBook &&book) noexcept : book_(std::move(book)) {}
+
+  /// Direct constructor — forwards to OrderBook constructor.
+  /// Aborts if the buffer is invalid.
+  MatchingEngine(void *buf, std::size_t buf_bytes,
+                 const OrderBook::Params &params) noexcept
+      : book_(buf, buf_bytes, params) {}
+
   ~MatchingEngine() = default;
 
-  // Non-copyable, non-movable (underlying OrderBook contains large arrays
-  // and IntrusiveLists with internal pointers).
+  // Non-copyable.
   MatchingEngine(const MatchingEngine &) = delete;
   MatchingEngine &operator=(const MatchingEngine &) = delete;
-  MatchingEngine(MatchingEngine &&) = delete;
-  MatchingEngine &operator=(MatchingEngine &&) = delete;
+
+  // Movable — swap-based, consistent with OrderBook/HashMap/IntrusiveList.
+  // fills_ (1.5KB) is included in the swap. Moves only happen at startup
+  // so the cost is irrelevant.
+  MatchingEngine(MatchingEngine &&other) noexcept { swap(other); }
+
+  MatchingEngine &operator=(MatchingEngine &&other) noexcept {
+    if (this != &other) {
+      MatchingEngine tmp(std::move(other));
+      swap(tmp);
+    }
+    return *this;
+  }
+
+  void swap(MatchingEngine &other) noexcept {
+    book_.swap(other.book_);
+    std::swap(fills_, other.fills_);
+    std::swap(fill_count_, other.fill_count_);
+  }
+
+  friend void swap(MatchingEngine &a, MatchingEngine &b) noexcept { a.swap(b); }
 
   /// Submit a limit order. Crosses resting orders if the price overlaps,
   /// then rests any unfilled remainder.
   ///
   /// @return MatchResult with fills and remaining quantity. The fills span
-  ///         is valid only until the next submit_order() call.
+  ///         is valid only until the next submit_order(), modify_order(),
+  ///         move, or swap (they share the same fills_[] buffer).
   [[nodiscard]] MatchResult submit_order(OrderId id, Side side, Price price,
                                          Qty qty) noexcept {
     // Reject zero-quantity orders upfront. Without this, qty=0 bypasses
@@ -232,6 +315,13 @@ public:
   /// Side is required because cancel_order() does not return the old
   /// order's side — the gateway must look it up from its id mapping.
   ///
+  /// Success contract: `success` means the old order was found and
+  /// cancelled. The replacement order then goes through submit_order()
+  /// which may itself fail (zero qty, duplicate new_id, book full) —
+  /// those outcomes are reflected in fills/remaining_qty/rested, NOT in
+  /// the success flag. This matches FIX semantics where the cancel and
+  /// the replacement are logically separate operations.
+  ///
   /// @return ModifyResult with success=false if the original order was
   ///         not found (already cancelled/filled).
   [[nodiscard]] ModifyResult modify_order(OrderId old_id, Side side,
@@ -256,11 +346,6 @@ public:
 
   /// Direct access to the underlying order book for queries.
   [[nodiscard]] const Book &book() const noexcept { return book_; }
-
-private:
-  Book book_;
-  std::array<Fill, MaxFills> fills_{};
-  std::uint32_t fill_count_{0};
 };
 
 } // namespace mk::algo

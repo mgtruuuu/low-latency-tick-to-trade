@@ -72,10 +72,14 @@ concept FreeListPolicy = requires(FL fl, typename FL::NodeType *node) {
  * faults).
  * @tparam T The type of object to pool. Must be trivially destructible
  *           and standard-layout. In practice, T should be an implicit-lifetime
- *           type (aggregate or trivially default-constructible) so that object
- *           lifetime begins automatically on the mmap'd storage (C++20
- * P0593R6). allocate() returns raw storage — the caller writes fields directly
- *           (no placement-new needed for implicit-lifetime types).
+ *           type (see [basic.types.general]: aggregate with non-user-provided
+ *           destructor, or has trivial eligible ctor + trivial non-deleted
+ *           dtor) so that object
+ *           lifetime begins automatically on the backing storage (C++20
+ *           P0593R6 for malloc/operator new; this codebase assumes mmap
+ *           behaves equivalently on supported toolchains). allocate() returns raw
+ *           storage — the caller writes fields directly (no placement-new
+ *           needed for implicit-lifetime types).
  * @tparam FreeList The free-list policy. Must satisfy FreeListPolicy concept.
  *           Defaults to LockFreeStack<T> (MPMC, 128-bit CAS).
  *           Use SingleThreadStack<T> for single-threaded hot paths
@@ -172,27 +176,9 @@ public:
     }
 
     const std::size_t bytes = capacity_ * sizeof(NodeType);
-    const RegionIntentConfig intent_cfg{
+    const RegionIntentConfig cfg{
         .size = bytes, .numa_node = numa_node, .lock_pages = lock_pages};
-    RegionIntent intent = RegionIntent::kHotRw; // Defensive default.
-    switch (pf) {
-    case PrefaultPolicy::kPopulateWrite:
-      intent = RegionIntent::kHotRw;
-      break;
-    case PrefaultPolicy::kPopulateRead:
-      intent = RegionIntent::kReadMostly;
-      break;
-    case PrefaultPolicy::kNone:
-      intent = RegionIntent::kCold;
-      break;
-    case PrefaultPolicy::kManualWrite:
-      intent = RegionIntent::kHotRw; // Manual prefault → degrade to hot R/W.
-      break;
-    case PrefaultPolicy::kManualRead:
-      intent = RegionIntent::kReadMostly; // Manual prefault → degrade to read.
-      break;
-    }
-    memory_block_ = allocate_region(intent_cfg, intent);
+    memory_block_ = allocate_region(cfg, to_region_intent(pf));
     init_free_list();
   }
 

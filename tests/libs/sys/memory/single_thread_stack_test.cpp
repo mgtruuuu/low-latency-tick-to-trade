@@ -141,14 +141,14 @@ TEST(SingleThreadStackEmpty, EmptyReflectsState) {
 TEST_F(SingleThreadStackTest, LargeBatchCycle) {
   // Pop all.
   Node *popped[kPoolSize]{};
-  for (auto & i : popped) {
+  for (auto &i : popped) {
     i = stack_.try_pop();
     ASSERT_NE(nullptr, i);
   }
   EXPECT_TRUE(stack_.empty());
 
   // Push all back.
-  for (auto & i : popped) {
+  for (auto &i : popped) {
     stack_.push(i);
   }
   EXPECT_FALSE(stack_.empty());

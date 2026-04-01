@@ -53,6 +53,16 @@ public:
       return false;
     }
 
+    // First packet: accept whatever seq as baseline (late multicast join).
+    // Without this, starting MD Publisher before tick_to_trade produces
+    // a false gap warning (e.g., "expected=1 got=7025 gap=7024").
+    if (!initialized_) [[unlikely]] {
+      initialized_ = true;
+      expected_seq_ = out.seq_num + 1;
+      total_updates_.fetch_add(1, std::memory_order_relaxed);
+      return true;
+    }
+
     // Sequence gap detection.
     // In production, a gap triggers a recovery mechanism (retransmission
     // request or switch to snapshot feed). Here we just count gaps and
@@ -95,7 +105,8 @@ public:
   }
 
 private:
-  std::uint64_t expected_seq_{1}; // Sequencing state — not a diagnostic counter.
+  bool initialized_{false};       // First packet sets baseline seq.
+  std::uint64_t expected_seq_{0}; // Sequencing state — not a diagnostic counter.
 
   // Diagnostic counters — std::atomic for cross-thread monitoring safety.
   // On x86-64, relaxed atomic store compiles to a plain MOV (zero overhead).

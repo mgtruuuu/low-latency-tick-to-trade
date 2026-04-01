@@ -8,11 +8,9 @@
 
 namespace {
 
-mk::app::MarketDataUpdate make_update(std::uint64_t seq,
-                                       std::uint32_t symbol_id,
-                                       mk::algo::Side side,
-                                       mk::algo::Price price,
-                                       mk::algo::Qty qty = 100) {
+mk::app::MarketDataUpdate
+make_update(std::uint64_t seq, std::uint32_t symbol_id, mk::algo::Side side,
+            mk::algo::Price price, mk::algo::Qty qty = 100) {
   return {.seq_num = seq,
           .symbol_id = symbol_id,
           .side = side,

@@ -95,7 +95,9 @@ TEST(MmapRegionTest, DefaultConstructsInvalid) {
 
 TEST(MmapRegionTest, DestructorToleratesInvalidRegion) {
   // Default-constructed region destroyed without crash.
-  { const MmapRegion region; }
+  {
+    const MmapRegion region;
+  }
   SUCCEED();
 }
 
@@ -103,14 +105,17 @@ TEST(MmapRegionTest, MoveConstructTransfersOwnership) {
   auto opt = MmapRegion::allocate_anonymous(4096);
   ASSERT_TRUE(opt.has_value());
 
-  void *original_addr = opt->get();                // NOLINT(bugprone-unchecked-optional-access)
-  const std::size_t original_size = opt->size();    // NOLINT(bugprone-unchecked-optional-access)
+  void *original_addr =
+      opt->get(); // NOLINT(bugprone-unchecked-optional-access)
+  const std::size_t original_size =
+      opt->size(); // NOLINT(bugprone-unchecked-optional-access)
 
-  const MmapRegion moved(std::move(*opt));          // NOLINT(bugprone-unchecked-optional-access)
+  const MmapRegion moved(
+      std::move(*opt)); // NOLINT(bugprone-unchecked-optional-access)
 
   // Source is invalid after move.
-  EXPECT_FALSE(opt->is_valid());                    // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(0U, opt->size());                       // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_FALSE(opt->is_valid()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(0U, opt->size());    // NOLINT(bugprone-unchecked-optional-access)
 
   // Destination has original values.
   EXPECT_EQ(original_addr, moved.get());
@@ -124,31 +129,34 @@ TEST(MmapRegionTest, MoveAssignTransfersAndUnmapsPrevious) {
   ASSERT_TRUE(opt_a.has_value());
   ASSERT_TRUE(opt_b.has_value());
 
-  void *addr_b = opt_b->get();                  // NOLINT(bugprone-unchecked-optional-access)
-  const std::size_t size_b = opt_b->size();      // NOLINT(bugprone-unchecked-optional-access)
+  void *addr_b = opt_b->get(); // NOLINT(bugprone-unchecked-optional-access)
+  const std::size_t size_b =
+      opt_b->size(); // NOLINT(bugprone-unchecked-optional-access)
 
   // Move-assign b into a. Previous mapping of a is unmapped.
-  *opt_a = std::move(*opt_b);                    // NOLINT(bugprone-unchecked-optional-access)
+  *opt_a = std::move(*opt_b); // NOLINT(bugprone-unchecked-optional-access)
 
-  EXPECT_EQ(addr_b, opt_a->get());               // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(size_b, opt_a->size());              // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_FALSE(opt_b->is_valid());               // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(addr_b, opt_a->get()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(size_b,
+            opt_a->size());        // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_FALSE(opt_b->is_valid()); // NOLINT(bugprone-unchecked-optional-access)
 }
 
 TEST(MmapRegionTest, SelfMoveAssignIsNoop) {
   auto opt = MmapRegion::allocate_anonymous(4096);
   ASSERT_TRUE(opt.has_value());
 
-  void *addr = opt->get();                       // NOLINT(bugprone-unchecked-optional-access)
-  const std::size_t size = opt->size();          // NOLINT(bugprone-unchecked-optional-access)
+  void *addr = opt->get(); // NOLINT(bugprone-unchecked-optional-access)
+  const std::size_t size =
+      opt->size(); // NOLINT(bugprone-unchecked-optional-access)
 
   // Self move-assign should be a no-op.
-  auto &ref = *opt;                              // NOLINT(bugprone-unchecked-optional-access)
+  auto &ref = *opt; // NOLINT(bugprone-unchecked-optional-access)
   ref = std::move(ref);
 
-  EXPECT_EQ(addr, opt->get());                   // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(size, opt->size());                  // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_TRUE(opt->is_valid());                  // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(addr, opt->get());  // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(size, opt->size()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(opt->is_valid()); // NOLINT(bugprone-unchecked-optional-access)
 }
 
 TEST(MmapRegionTest, NotCopyableIsMovable) {
@@ -165,12 +173,13 @@ TEST(MmapRegionTest, NotCopyableIsMovable) {
 TEST(MmapRegionAnonymous, AllocateReturnsValidRegion) {
   auto opt = MmapRegion::allocate_anonymous(4096);
   ASSERT_TRUE(opt.has_value());
-  EXPECT_NE(nullptr, opt->get());                 // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_GE(opt->size(), 4096U);                  // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_TRUE(opt->is_valid());                   // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_NE(nullptr, opt->get()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_GE(opt->size(), 4096U);  // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(opt->is_valid());   // NOLINT(bugprone-unchecked-optional-access)
 
   // Write and read back to verify the memory is usable.
-  auto *ptr = static_cast<std::uint64_t *>(opt->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *ptr = static_cast<std::uint64_t *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
   *ptr = 0xDEADBEEFCAFEBABE;
   EXPECT_EQ(0xDEADBEEFCAFEBABE, *ptr);
 }
@@ -178,11 +187,11 @@ TEST(MmapRegionAnonymous, AllocateReturnsValidRegion) {
 TEST(MmapRegionAnonymous, SizeRoundedUpToPageBoundary) {
   auto opt1 = MmapRegion::allocate_anonymous(1);
   ASSERT_TRUE(opt1.has_value());
-  EXPECT_EQ(4096U, opt1->size());                  // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(4096U, opt1->size()); // NOLINT(bugprone-unchecked-optional-access)
 
   auto opt2 = MmapRegion::allocate_anonymous(4097);
   ASSERT_TRUE(opt2.has_value());
-  EXPECT_EQ(8192U, opt2->size());                  // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(8192U, opt2->size()); // NOLINT(bugprone-unchecked-optional-access)
 }
 
 TEST(MmapRegionAnonymous, ZeroSizeReturnsNullopt) {
@@ -193,14 +202,18 @@ TEST(MmapRegionAnonymous, ZeroSizeReturnsNullopt) {
 TEST(MmapRegionAnonymous, LargeAllocationWorks) {
   auto opt = MmapRegion::allocate_anonymous(mk::sys::kHugePageSize2MB);
   ASSERT_TRUE(opt.has_value());
-  EXPECT_EQ(mk::sys::kHugePageSize2MB, opt->size());  // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(mk::sys::kHugePageSize2MB,
+            opt->size()); // NOLINT(bugprone-unchecked-optional-access)
 
   // Write to first and last page to verify the entire region is usable.
-  auto *data = opt->data();                        // NOLINT(bugprone-unchecked-optional-access)
+  auto *data = opt->data(); // NOLINT(bugprone-unchecked-optional-access)
   data[0] = std::byte{0x42};
-  data[opt->size() - 1] = std::byte{0x43};        // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  data[opt->size() - 1] = std::byte{0x43};
   EXPECT_EQ(std::byte{0x42}, data[0]);
-  EXPECT_EQ(std::byte{0x43}, data[opt->size() - 1]);  // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(
+      std::byte{0x43},
+      data[opt->size() - 1]); // NOLINT(bugprone-unchecked-optional-access)
 }
 
 // ============================================================================
@@ -214,11 +227,13 @@ TEST(MmapRegionHugePages, AllocateSucceedsWhenAvailable) {
                     "(check /proc/sys/vm/nr_hugepages)";
   }
 
-  EXPECT_EQ(mk::sys::kHugePageSize2MB, opt->size());  // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_NE(nullptr, opt->get());                  // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(mk::sys::kHugePageSize2MB,
+            opt->size());         // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_NE(nullptr, opt->get()); // NOLINT(bugprone-unchecked-optional-access)
 
   // Verify writable.
-  auto *ptr = static_cast<std::uint64_t *>(opt->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *ptr = static_cast<std::uint64_t *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
   *ptr = 0x1234567890ABCDEF;
   EXPECT_EQ(0x1234567890ABCDEF, *ptr);
 }
@@ -229,7 +244,8 @@ TEST(MmapRegionHugePages, SizeRoundedUpToHugePageBoundary) {
     GTEST_SKIP() << "Huge pages not available on this system";
   }
 
-  EXPECT_EQ(mk::sys::kHugePageSize2MB, opt->size());  // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(mk::sys::kHugePageSize2MB,
+            opt->size()); // NOLINT(bugprone-unchecked-optional-access)
 }
 
 TEST(MmapRegionHugePages, Allocate2GBPool) {
@@ -246,10 +262,11 @@ TEST(MmapRegionHugePages, Allocate2GBPool) {
            "linux_memory_config.md for setup instructions.";
   }
 
-  EXPECT_EQ(k2Gb, opt->size());                   // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_NE(nullptr, opt->get());                  // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(k2Gb, opt->size());   // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_NE(nullptr, opt->get()); // NOLINT(bugprone-unchecked-optional-access)
 
-  auto *data = static_cast<std::byte *>(opt->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *data = static_cast<std::byte *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
 
   // Write sentinel at the beginning and end of the region.
   data[0] = std::byte{0xAA};
@@ -296,7 +313,8 @@ TEST_F(MmapRegionSharedTest, CreateAndOpenRoundTrip) {
   ASSERT_TRUE(producer.has_value())
       << "shm_open failed — check permissions or /dev/shm availability";
 
-  auto *write_ptr = static_cast<std::uint64_t *>(producer->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *write_ptr = static_cast<std::uint64_t *>(
+      producer->get()); // NOLINT(bugprone-unchecked-optional-access)
   constexpr std::uint64_t kMagic = 0xCAFEBABE12345678;
   *write_ptr = kMagic;
 
@@ -305,7 +323,8 @@ TEST_F(MmapRegionSharedTest, CreateAndOpenRoundTrip) {
       MmapRegion::open_shared(shm_name_, 4096, ShmMode::kOpenExisting);
   ASSERT_TRUE(consumer.has_value());
 
-  const auto *read_ptr = static_cast<const std::uint64_t *>(consumer->get());  // NOLINT(bugprone-unchecked-optional-access)
+  const auto *read_ptr = static_cast<const std::uint64_t *>(
+      consumer->get()); // NOLINT(bugprone-unchecked-optional-access)
   EXPECT_EQ(kMagic, *read_ptr);
 }
 
@@ -324,8 +343,8 @@ TEST_F(MmapRegionSharedTest, OpenExistingOversizedFails) {
   // Consumer tries to open with a size larger than the actual object.
   // This should fail (fstat detects the mismatch) instead of silently
   // mapping beyond the object's bounds and risking SIGBUS.
-  auto consumer =
-      MmapRegion::open_shared(shm_name_, std::size_t{4096} * 10, ShmMode::kOpenExisting);
+  auto consumer = MmapRegion::open_shared(shm_name_, std::size_t{4096} * 10,
+                                          ShmMode::kOpenExisting);
   EXPECT_FALSE(consumer.has_value());
 }
 
@@ -363,10 +382,11 @@ TEST_F(MmapRegionFileTest, MapReadOnlyFile) {
 
   auto opt = MmapRegion::map_file(fd_, 4096, 0, false);
   ASSERT_TRUE(opt.has_value());
-  EXPECT_EQ(4096U, opt->size());                   // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(4096U, opt->size()); // NOLINT(bugprone-unchecked-optional-access)
 
   // Verify mapped content matches.
-  const auto *mapped = static_cast<const char *>(opt->get());  // NOLINT(bugprone-unchecked-optional-access)
+  const auto *mapped = static_cast<const char *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
   EXPECT_EQ(0, std::memcmp(mapped, kData, data_len));
 }
 
@@ -378,7 +398,8 @@ TEST_F(MmapRegionFileTest, MapWritableFile) {
 
   // Write through the mapping.
   constexpr std::uint64_t kMagic = 0xFEEDFACEDEADC0DE;
-  auto *ptr = static_cast<std::uint64_t *>(opt->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *ptr = static_cast<std::uint64_t *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
   *ptr = kMagic;
 
   // Read back via the mapping.
@@ -424,14 +445,16 @@ TEST(MmapRegionTest, ReleaseTransfersOwnership) {
   auto opt = MmapRegion::allocate_anonymous(4096);
   ASSERT_TRUE(opt.has_value());
 
-  void *expected_addr = opt->get();                // NOLINT(bugprone-unchecked-optional-access)
-  const std::size_t expected_size = opt->size();   // NOLINT(bugprone-unchecked-optional-access)
+  void *expected_addr =
+      opt->get(); // NOLINT(bugprone-unchecked-optional-access)
+  const std::size_t expected_size =
+      opt->size(); // NOLINT(bugprone-unchecked-optional-access)
 
-  auto raw = opt->release();                       // NOLINT(bugprone-unchecked-optional-access)
+  auto raw = opt->release(); // NOLINT(bugprone-unchecked-optional-access)
 
   // Region is now invalid.
-  EXPECT_FALSE(opt->is_valid());                   // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(0U, opt->size());                      // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_FALSE(opt->is_valid()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(0U, opt->size());    // NOLINT(bugprone-unchecked-optional-access)
 
   // Returned RawRegion has the original values.
   EXPECT_EQ(expected_addr, raw.addr);
@@ -453,13 +476,13 @@ TEST(MmapRegionTest, ReleaseOnInvalidReturnsMapFailed) {
 TEST(MmapRegionTest, ResetUnmapsAndInvalidates) {
   auto opt = MmapRegion::allocate_anonymous(4096);
   ASSERT_TRUE(opt.has_value());
-  EXPECT_TRUE(opt->is_valid());                    // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(opt->is_valid()); // NOLINT(bugprone-unchecked-optional-access)
 
-  opt->reset();                                    // NOLINT(bugprone-unchecked-optional-access)
+  opt->reset(); // NOLINT(bugprone-unchecked-optional-access)
 
-  EXPECT_FALSE(opt->is_valid());                   // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(nullptr, opt->get());                  // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(0U, opt->size());                      // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_FALSE(opt->is_valid());  // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(nullptr, opt->get()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(0U, opt->size());     // NOLINT(bugprone-unchecked-optional-access)
 }
 
 TEST(MmapRegionTest, ResetOnInvalidIsNoop) {
@@ -474,17 +497,21 @@ TEST(MmapRegionTest, SwapExchangesRegions) {
   ASSERT_TRUE(opt_a.has_value());
   ASSERT_TRUE(opt_b.has_value());
 
-  void *addr_a = opt_a->get();                     // NOLINT(bugprone-unchecked-optional-access)
-  const std::size_t size_a = opt_a->size();        // NOLINT(bugprone-unchecked-optional-access)
-  void *addr_b = opt_b->get();                     // NOLINT(bugprone-unchecked-optional-access)
-  const std::size_t size_b = opt_b->size();        // NOLINT(bugprone-unchecked-optional-access)
+  void *addr_a = opt_a->get(); // NOLINT(bugprone-unchecked-optional-access)
+  const std::size_t size_a =
+      opt_a->size();           // NOLINT(bugprone-unchecked-optional-access)
+  void *addr_b = opt_b->get(); // NOLINT(bugprone-unchecked-optional-access)
+  const std::size_t size_b =
+      opt_b->size(); // NOLINT(bugprone-unchecked-optional-access)
 
-  opt_a->swap(*opt_b);                             // NOLINT(bugprone-unchecked-optional-access)
+  opt_a->swap(*opt_b); // NOLINT(bugprone-unchecked-optional-access)
 
-  EXPECT_EQ(addr_b, opt_a->get());                 // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(size_b, opt_a->size());                // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(addr_a, opt_b->get());                 // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(size_a, opt_b->size());                // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(addr_b, opt_a->get()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(size_b,
+            opt_a->size());        // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(addr_a, opt_b->get()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(size_a,
+            opt_b->size()); // NOLINT(bugprone-unchecked-optional-access)
 }
 
 TEST(MmapRegionTest, AdlSwapWorks) {
@@ -493,15 +520,15 @@ TEST(MmapRegionTest, AdlSwapWorks) {
   ASSERT_TRUE(opt_a.has_value());
   ASSERT_TRUE(opt_b.has_value());
 
-  void *addr_a = opt_a->get();                     // NOLINT(bugprone-unchecked-optional-access)
-  void *addr_b = opt_b->get();                     // NOLINT(bugprone-unchecked-optional-access)
+  void *addr_a = opt_a->get(); // NOLINT(bugprone-unchecked-optional-access)
+  void *addr_b = opt_b->get(); // NOLINT(bugprone-unchecked-optional-access)
 
   // Unqualified swap should find the ADL friend function.
   using std::swap;
-  swap(*opt_a, *opt_b);                            // NOLINT(bugprone-unchecked-optional-access)
+  swap(*opt_a, *opt_b); // NOLINT(bugprone-unchecked-optional-access)
 
-  EXPECT_EQ(addr_b, opt_a->get());                 // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(addr_a, opt_b->get());                 // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(addr_b, opt_a->get()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(addr_a, opt_b->get()); // NOLINT(bugprone-unchecked-optional-access)
 }
 
 // ============================================================================
@@ -512,10 +539,11 @@ TEST(MmapRegionTest, PrefaultWriteTouchWorks) {
   auto opt = MmapRegion::allocate_anonymous(std::size_t{4096} * 4);
   ASSERT_TRUE(opt.has_value());
 
-  EXPECT_TRUE(opt->prefault(true));                 // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(
+      opt->prefault(true)); // NOLINT(bugprone-unchecked-optional-access)
 
   // Verify pages are usable (no fault on access).
-  auto *data = opt->data();                        // NOLINT(bugprone-unchecked-optional-access)
+  auto *data = opt->data(); // NOLINT(bugprone-unchecked-optional-access)
   data[0] = std::byte{0x11};
   data[4096] = std::byte{0x22};
   data[std::size_t{4096} * 2] = std::byte{0x33};
@@ -535,7 +563,8 @@ TEST_F(MmapRegionSharedTest, PrefaultReadTouchPreservesData) {
       MmapRegion::open_shared(shm_name_, 4096, ShmMode::kCreateOrOpen);
   ASSERT_TRUE(producer.has_value());
 
-  auto *write_ptr = static_cast<std::uint64_t *>(producer->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *write_ptr = static_cast<std::uint64_t *>(
+      producer->get()); // NOLINT(bugprone-unchecked-optional-access)
   constexpr std::uint64_t kPattern = 0xABCD1234DEADBEEF;
   *write_ptr = kPattern;
 
@@ -544,9 +573,11 @@ TEST_F(MmapRegionSharedTest, PrefaultReadTouchPreservesData) {
   auto consumer =
       MmapRegion::open_shared(shm_name_, 4096, ShmMode::kOpenExisting);
   ASSERT_TRUE(consumer.has_value());
-  EXPECT_TRUE(consumer->prefault(false));          // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(
+      consumer->prefault(false)); // NOLINT(bugprone-unchecked-optional-access)
 
-  const auto *read_ptr = static_cast<const std::uint64_t *>(consumer->get());  // NOLINT(bugprone-unchecked-optional-access)
+  const auto *read_ptr = static_cast<const std::uint64_t *>(
+      consumer->get()); // NOLINT(bugprone-unchecked-optional-access)
   EXPECT_EQ(kPattern, *read_ptr);
 }
 
@@ -556,7 +587,8 @@ TEST(MmapRegionAnonymous, PrefaultPolicyPopulateWrite) {
   ASSERT_TRUE(opt.has_value());
 
   // Verify region is valid and usable.
-  auto *ptr = static_cast<std::uint64_t *>(opt->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *ptr = static_cast<std::uint64_t *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
   *ptr = 42;
   EXPECT_EQ(42U, *ptr);
 }
@@ -565,7 +597,8 @@ TEST(MmapRegionAnonymous, PrefaultPolicyManualWrite) {
   auto opt = MmapRegion::allocate_anonymous(4096, PrefaultPolicy::kManualWrite);
   ASSERT_TRUE(opt.has_value());
 
-  auto *ptr = static_cast<std::uint64_t *>(opt->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *ptr = static_cast<std::uint64_t *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
   *ptr = 99;
   EXPECT_EQ(99U, *ptr);
 }
@@ -576,7 +609,8 @@ TEST(MmapRegionAnonymous, PrefaultPolicyPopulateRead) {
   ASSERT_TRUE(opt.has_value());
 
   // Read-prefaulted region should be usable.
-  auto *ptr = static_cast<std::uint64_t *>(opt->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *ptr = static_cast<std::uint64_t *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
   *ptr = 55;
   EXPECT_EQ(55U, *ptr);
 }
@@ -585,7 +619,8 @@ TEST(MmapRegionAnonymous, PrefaultPolicyManualRead) {
   auto opt = MmapRegion::allocate_anonymous(4096, PrefaultPolicy::kManualRead);
   ASSERT_TRUE(opt.has_value());
 
-  auto *ptr = static_cast<std::uint64_t *>(opt->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *ptr = static_cast<std::uint64_t *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
   *ptr = 77;
   EXPECT_EQ(77U, *ptr);
 }
@@ -596,7 +631,8 @@ TEST_F(MmapRegionSharedTest, PrefaultReadPolicyPreservesData) {
       MmapRegion::open_shared(shm_name_, 4096, ShmMode::kCreateOrOpen);
   ASSERT_TRUE(producer.has_value());
 
-  auto *write_ptr = static_cast<std::uint64_t *>(producer->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *write_ptr = static_cast<std::uint64_t *>(
+      producer->get()); // NOLINT(bugprone-unchecked-optional-access)
   constexpr std::uint64_t kPattern = 0x1122334455667788;
   *write_ptr = kPattern;
 
@@ -606,7 +642,8 @@ TEST_F(MmapRegionSharedTest, PrefaultReadPolicyPreservesData) {
       shm_name_, 4096, ShmMode::kOpenExisting, PrefaultPolicy::kPopulateRead);
   ASSERT_TRUE(consumer.has_value());
 
-  const auto *read_ptr = static_cast<const std::uint64_t *>(consumer->get());  // NOLINT(bugprone-unchecked-optional-access)
+  const auto *read_ptr = static_cast<const std::uint64_t *>(
+      consumer->get()); // NOLINT(bugprone-unchecked-optional-access)
   EXPECT_EQ(kPattern, *read_ptr);
 }
 
@@ -616,7 +653,8 @@ TEST_F(MmapRegionSharedTest, PrefaultManualReadPolicyPreservesData) {
       MmapRegion::open_shared(shm_name_, 4096, ShmMode::kCreateOrOpen);
   ASSERT_TRUE(producer.has_value());
 
-  auto *write_ptr = static_cast<std::uint64_t *>(producer->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *write_ptr = static_cast<std::uint64_t *>(
+      producer->get()); // NOLINT(bugprone-unchecked-optional-access)
   constexpr std::uint64_t kPattern = 0xAABBCCDDEEFF0011;
   *write_ptr = kPattern;
 
@@ -625,7 +663,8 @@ TEST_F(MmapRegionSharedTest, PrefaultManualReadPolicyPreservesData) {
       shm_name_, 4096, ShmMode::kOpenExisting, PrefaultPolicy::kManualRead);
   ASSERT_TRUE(consumer.has_value());
 
-  const auto *read_ptr = static_cast<const std::uint64_t *>(consumer->get());  // NOLINT(bugprone-unchecked-optional-access)
+  const auto *read_ptr = static_cast<const std::uint64_t *>(
+      consumer->get()); // NOLINT(bugprone-unchecked-optional-access)
   EXPECT_EQ(kPattern, *read_ptr);
 }
 
@@ -635,7 +674,8 @@ TEST(MmapRegionTest, AdviseHugePageHint) {
   ASSERT_TRUE(opt.has_value());
 
   // MADV_HUGEPAGE may fail if THP is disabled — not a test failure.
-  const bool result = opt->advise(MADV_HUGEPAGE);  // NOLINT(bugprone-unchecked-optional-access)
+  const bool result =
+      opt->advise(MADV_HUGEPAGE); // NOLINT(bugprone-unchecked-optional-access)
   // We just verify the method doesn't crash; the return value depends
   // on kernel configuration.
   (void)result;
@@ -646,13 +686,13 @@ TEST(MmapRegionTest, LockAndUnlock) {
   auto opt = MmapRegion::allocate_anonymous(4096);
   ASSERT_TRUE(opt.has_value());
 
-  const bool locked = opt->lock();                  // NOLINT(bugprone-unchecked-optional-access)
+  const bool locked = opt->lock(); // NOLINT(bugprone-unchecked-optional-access)
   if (!locked) {
     GTEST_SKIP() << "mlock failed — insufficient RLIMIT_MEMLOCK "
                     "(common in containers)";
   }
 
-  EXPECT_TRUE(opt->unlock());                      // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(opt->unlock()); // NOLINT(bugprone-unchecked-optional-access)
 }
 
 TEST(MmapRegionTest, LockOnInvalidReturnsFalse) {
@@ -675,18 +715,21 @@ TEST(MmapRegionTest, ProtectReadOnly) {
   ASSERT_TRUE(opt.has_value());
 
   // Write before protecting.
-  auto *ptr = static_cast<std::uint64_t *>(opt->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *ptr = static_cast<std::uint64_t *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
   *ptr = 42;
   EXPECT_EQ(42U, *ptr);
 
   // Mark read-only.
-  EXPECT_TRUE(opt->protect(PROT_READ));            // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(
+      opt->protect(PROT_READ)); // NOLINT(bugprone-unchecked-optional-access)
 
   // Read should still work.
   EXPECT_EQ(42U, *ptr);
 
   // Restore to read-write for clean destruction.
-  EXPECT_TRUE(opt->protect(PROT_READ | PROT_WRITE));  // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(opt->protect(PROT_READ | PROT_WRITE));
 }
 
 TEST(MmapRegionTest, ProtectNoneCreatesGuardPage) {
@@ -694,10 +737,12 @@ TEST(MmapRegionTest, ProtectNoneCreatesGuardPage) {
   ASSERT_TRUE(opt.has_value());
 
   // Mark as guard page (no access).
-  EXPECT_TRUE(opt->protect(PROT_NONE));            // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(
+      opt->protect(PROT_NONE)); // NOLINT(bugprone-unchecked-optional-access)
 
   // Restore for clean destruction.
-  EXPECT_TRUE(opt->protect(PROT_READ | PROT_WRITE));  // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(opt->protect(PROT_READ | PROT_WRITE));
 }
 
 TEST(MmapRegionTest, ProtectOnInvalidReturnsFalse) {
@@ -712,8 +757,10 @@ TEST(MmapRegionDeathTest, ProtectReadOnlyPreventsWrite) {
   auto opt = MmapRegion::allocate_anonymous(4096);
   ASSERT_TRUE(opt.has_value());
 
-  auto *ptr = static_cast<int *>(opt->get());       // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_TRUE(opt->protect(PROT_READ));            // NOLINT(bugprone-unchecked-optional-access)
+  auto *ptr = static_cast<int *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(
+      opt->protect(PROT_READ)); // NOLINT(bugprone-unchecked-optional-access)
 
   // Writing to read-only memory should cause SIGSEGV.
   EXPECT_DEATH(*ptr = 1, ".*");
@@ -723,8 +770,10 @@ TEST(MmapRegionDeathTest, ProtectNonePreventsAccess) {
   auto opt = MmapRegion::allocate_anonymous(4096);
   ASSERT_TRUE(opt.has_value());
 
-  auto *ptr = static_cast<volatile int *>(opt->get());  // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_TRUE(opt->protect(PROT_NONE));            // NOLINT(bugprone-unchecked-optional-access)
+  auto *ptr = static_cast<volatile int *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(
+      opt->protect(PROT_NONE)); // NOLINT(bugprone-unchecked-optional-access)
 
   // Any access to a PROT_NONE page should cause SIGSEGV.
   EXPECT_DEATH({ [[maybe_unused]] const int x = *ptr; }, ".*");
@@ -739,20 +788,22 @@ TEST(MmapRegionTest, RemapGrowsMapping) {
   ASSERT_TRUE(opt.has_value());
 
   // Write a sentinel before grow.
-  auto *ptr = static_cast<std::uint64_t *>(opt->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *ptr = static_cast<std::uint64_t *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
   *ptr = 0xDEADBEEF;
 
   // Grow to 2 pages.
-  EXPECT_TRUE(opt->remap(8192));                   // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(8192U, opt->size());                   // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_TRUE(opt->is_valid());                    // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(opt->remap(8192)); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(8192U, opt->size()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(opt->is_valid());  // NOLINT(bugprone-unchecked-optional-access)
 
   // Original data should be preserved (mremap copies).
-  ptr = static_cast<std::uint64_t *>(opt->get());  // NOLINT(bugprone-unchecked-optional-access)
+  ptr = static_cast<std::uint64_t *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
   EXPECT_EQ(0xDEADBEEFU, *ptr);
 
   // New space should be usable.
-  auto *data = opt->data();                        // NOLINT(bugprone-unchecked-optional-access)
+  auto *data = opt->data(); // NOLINT(bugprone-unchecked-optional-access)
   data[4096] = std::byte{0x42};
   EXPECT_EQ(std::byte{0x42}, data[4096]);
 }
@@ -761,9 +812,9 @@ TEST(MmapRegionTest, RemapShrinksMapping) {
   auto opt = MmapRegion::allocate_anonymous(8192);
   ASSERT_TRUE(opt.has_value());
 
-  EXPECT_TRUE(opt->remap(4096));                   // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(4096U, opt->size());                   // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_TRUE(opt->is_valid());                    // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(opt->remap(4096)); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(4096U, opt->size()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(opt->is_valid());  // NOLINT(bugprone-unchecked-optional-access)
 }
 
 TEST(MmapRegionTest, RemapOnInvalidReturnsFalse) {
@@ -774,9 +825,9 @@ TEST(MmapRegionTest, RemapOnInvalidReturnsFalse) {
 TEST(MmapRegionTest, RemapZeroSizeReturnsFalse) {
   auto opt = MmapRegion::allocate_anonymous(4096);
   ASSERT_TRUE(opt.has_value());
-  EXPECT_FALSE(opt->remap(0));                     // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_FALSE(opt->remap(0)); // NOLINT(bugprone-unchecked-optional-access)
   // Region should be unchanged.
-  EXPECT_EQ(4096U, opt->size());                   // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(4096U, opt->size()); // NOLINT(bugprone-unchecked-optional-access)
 }
 
 // ============================================================================
@@ -791,15 +842,18 @@ TEST(MmapRegionTest, BindNumaNodeOnInvalidReturnsFalse) {
 TEST(MmapRegionTest, BindNumaNodeNegativeReturnsFalse) {
   auto opt = MmapRegion::allocate_anonymous(4096);
   ASSERT_TRUE(opt.has_value());
-  EXPECT_FALSE(opt->bind_numa_node(-1));            // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_FALSE(
+      opt->bind_numa_node(-1)); // NOLINT(bugprone-unchecked-optional-access)
 }
 
 TEST(MmapRegionTest, BindNumaNodeOutOfRangeReturnsFalse) {
   auto opt = MmapRegion::allocate_anonymous(4096);
   ASSERT_TRUE(opt.has_value());
   // Implementation limits node IDs to [0, 64) — single unsigned long bitmask.
-  EXPECT_FALSE(opt->bind_numa_node(64));           // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_FALSE(opt->bind_numa_node(65));           // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_FALSE(
+      opt->bind_numa_node(64)); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_FALSE(
+      opt->bind_numa_node(65)); // NOLINT(bugprone-unchecked-optional-access)
 }
 
 TEST(MmapRegionTest, BindNumaNode0Succeeds) {
@@ -807,14 +861,16 @@ TEST(MmapRegionTest, BindNumaNode0Succeeds) {
   ASSERT_TRUE(opt.has_value());
 
   // Node 0 should exist on all systems with NUMA support.
-  const bool result = opt->bind_numa_node(0);      // NOLINT(bugprone-unchecked-optional-access)
+  const bool result =
+      opt->bind_numa_node(0); // NOLINT(bugprone-unchecked-optional-access)
   if (!result) {
     GTEST_SKIP() << "mbind failed — system may not have NUMA support "
                     "(single-socket or CONFIG_NUMA=n)";
   }
 
   // Verify region is still usable after binding.
-  auto *ptr = static_cast<std::uint64_t *>(opt->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *ptr = static_cast<std::uint64_t *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
   *ptr = 123;
   EXPECT_EQ(123U, *ptr);
 }
@@ -829,8 +885,9 @@ TEST(MmapRegionTest, AllocateAnonymousWithMapLocked) {
     GTEST_SKIP() << "MAP_LOCKED failed — insufficient RLIMIT_MEMLOCK";
   }
 
-  EXPECT_TRUE(opt->is_valid());                    // NOLINT(bugprone-unchecked-optional-access)
-  auto *ptr = static_cast<std::uint64_t *>(opt->get());  // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(opt->is_valid()); // NOLINT(bugprone-unchecked-optional-access)
+  auto *ptr = static_cast<std::uint64_t *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
   *ptr = 77;
   EXPECT_EQ(77U, *ptr);
 }
@@ -850,10 +907,11 @@ TEST_F(MmapRegionFileTest, MapFileAutoDetectSize) {
   // Use the auto-detect overload (no explicit size).
   auto opt = MmapRegion::map_file(fd_, false);
   ASSERT_TRUE(opt.has_value());
-  EXPECT_EQ(4096U, opt->size());                   // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(4096U, opt->size()); // NOLINT(bugprone-unchecked-optional-access)
 
   // Verify content matches.
-  const auto *mapped = static_cast<const char *>(opt->get());  // NOLINT(bugprone-unchecked-optional-access)
+  const auto *mapped = static_cast<const char *>(
+      opt->get()); // NOLINT(bugprone-unchecked-optional-access)
   EXPECT_EQ(0, std::memcmp(mapped, kData, data_len));
 }
 

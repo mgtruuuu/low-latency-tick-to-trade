@@ -24,8 +24,8 @@
 
 #include "net/message_codec.hpp"
 
-#include "sys/log/async_logger.hpp"
-#include "sys/log/log_macros.hpp"
+#include "pipeline_log_push.hpp"
+
 #include "sys/log/signal_logger.hpp"
 #include "sys/nano_clock.hpp"
 
@@ -47,7 +47,7 @@ public:
   [[nodiscard]] bool
   on_tcp_message(const net::ParsedMessageView &msg, OrderManager &order_mgr,
                  LatencyTracker &tracker, ConnectionState &conn,
-                 sys::log::LogQueue &log_queue) noexcept {
+                 PipelineLogQueue &log_queue) noexcept {
     auto msg_type = static_cast<MsgType>(msg.header.msg_type);
 
     switch (msg_type) {
@@ -57,9 +57,9 @@ public:
         tracker.record_order_rtt(ack.send_ts);
         order_mgr.on_order_ack(ack);
         consecutive_rejects_ = 0;
-        (void)sys::log::log_order(
-            log_queue, sys::log::kThreadIdStrategy, sys::log::LogLevel::kInfo,
-            sys::log::OrderEvent::kOrderAck, 0, 0, 0, 0, ack.client_order_id,
+        (void)log_order(
+            log_queue, kThreadIdStrategy, LogLevel::kInfo,
+            OrderEvent::kOrderAck, 0, 0, 0, 0, ack.client_order_id,
             ack.exchange_order_id);
       } else {
         parse_errors_.fetch_add(1, std::memory_order_relaxed);
@@ -71,9 +71,9 @@ public:
       if (deserialize_order_reject(msg.payload, rej)) {
         order_mgr.on_order_reject(rej);
         ++consecutive_rejects_;
-        (void)sys::log::log_order(
-            log_queue, sys::log::kThreadIdStrategy, sys::log::LogLevel::kWarn,
-            sys::log::OrderEvent::kOrderReject, 0, 0, 0, 0,
+        (void)log_order(
+            log_queue, kThreadIdStrategy, LogLevel::kWarn,
+            OrderEvent::kOrderReject, 0, 0, 0, 0,
             rej.client_order_id);
         if (consecutive_rejects_ >= kMaxConsecutiveRejects) {
           return true; // Signal caller to trigger kill switch.
@@ -89,9 +89,9 @@ public:
         tracker.record_order_rtt(fill.send_ts);
         order_mgr.on_fill(fill);
         consecutive_rejects_ = 0;
-        (void)sys::log::log_order(
-            log_queue, sys::log::kThreadIdStrategy, sys::log::LogLevel::kInfo,
-            sys::log::OrderEvent::kFill, 0, 0, fill.fill_price, fill.fill_qty,
+        (void)log_order(
+            log_queue, kThreadIdStrategy, LogLevel::kInfo,
+            OrderEvent::kFill, 0, 0, fill.fill_price, fill.fill_qty,
             fill.client_order_id, fill.exchange_order_id, fill.remaining_qty);
       } else {
         parse_errors_.fetch_add(1, std::memory_order_relaxed);
@@ -102,9 +102,9 @@ public:
       CancelAck ack;
       if (deserialize_cancel_ack(msg.payload, ack)) {
         order_mgr.on_cancel_ack(ack);
-        (void)sys::log::log_order(
-            log_queue, sys::log::kThreadIdStrategy, sys::log::LogLevel::kInfo,
-            sys::log::OrderEvent::kCancelAck, 0, 0, 0, 0, ack.client_order_id);
+        (void)log_order(
+            log_queue, kThreadIdStrategy, LogLevel::kInfo,
+            OrderEvent::kCancelAck, 0, 0, 0, 0, ack.client_order_id);
       } else {
         parse_errors_.fetch_add(1, std::memory_order_relaxed);
       }
@@ -114,9 +114,9 @@ public:
       CancelReject cr;
       if (deserialize_cancel_reject(msg.payload, cr)) {
         order_mgr.on_cancel_reject(cr);
-        (void)sys::log::log_order(
-            log_queue, sys::log::kThreadIdStrategy, sys::log::LogLevel::kWarn,
-            sys::log::OrderEvent::kCancelReject, 0, 0, 0, 0,
+        (void)log_order(
+            log_queue, kThreadIdStrategy, LogLevel::kWarn,
+            OrderEvent::kCancelReject, 0, 0, 0, 0,
             cr.client_order_id);
       } else {
         parse_errors_.fetch_add(1, std::memory_order_relaxed);
@@ -128,9 +128,9 @@ public:
       if (deserialize_modify_ack(msg.payload, ack)) {
         tracker.record_order_rtt(ack.send_ts);
         order_mgr.on_modify_ack(ack);
-        (void)sys::log::log_order(
-            log_queue, sys::log::kThreadIdStrategy, sys::log::LogLevel::kInfo,
-            sys::log::OrderEvent::kModifyAck, 0, 0, 0, 0, ack.client_order_id,
+        (void)log_order(
+            log_queue, kThreadIdStrategy, LogLevel::kInfo,
+            OrderEvent::kModifyAck, 0, 0, 0, 0, ack.client_order_id,
             ack.new_exchange_order_id);
       } else {
         parse_errors_.fetch_add(1, std::memory_order_relaxed);
@@ -141,9 +141,9 @@ public:
       ModifyReject rej;
       if (deserialize_modify_reject(msg.payload, rej)) {
         order_mgr.on_modify_reject(rej);
-        (void)sys::log::log_order(
-            log_queue, sys::log::kThreadIdStrategy, sys::log::LogLevel::kWarn,
-            sys::log::OrderEvent::kModifyReject, 0, 0, 0, 0,
+        (void)log_order(
+            log_queue, kThreadIdStrategy, LogLevel::kWarn,
+            OrderEvent::kModifyReject, 0, 0, 0, 0,
             rej.client_order_id);
       } else {
         parse_errors_.fetch_add(1, std::memory_order_relaxed);
@@ -153,9 +153,9 @@ public:
     case MsgType::kHeartbeatAck:
       conn.last_hb_recv = sys::monotonic_nanos();
       conn.heartbeats_recv.fetch_add(1, std::memory_order_relaxed);
-      (void)sys::log::log_connection(
-          log_queue, sys::log::kThreadIdStrategy, sys::log::LogLevel::kDebug,
-          sys::log::ConnectionEvent::kHeartbeatRecv);
+      (void)log_connection(
+          log_queue, kThreadIdStrategy, LogLevel::kDebug,
+          ConnectionEvent::kHeartbeatRecv);
       break;
     default:
       unknown_types_.fetch_add(1, std::memory_order_relaxed);

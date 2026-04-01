@@ -28,7 +28,7 @@ constexpr std::size_t kTestWheelSize = 256;
 constexpr std::size_t kTestMaxTimers = 4;
 
 mk::app::Signal make_signal(std::uint32_t symbol_id, mk::algo::Side side,
-                             mk::algo::Price price, mk::algo::Qty qty = 10) {
+                            mk::algo::Price price, mk::algo::Qty qty = 10) {
   return {.side = side, .price = price, .qty = qty, .symbol_id = symbol_id};
 }
 
@@ -38,13 +38,10 @@ protected:
     // Construct OrderCtx from stack buffer, then OrderManager on top.
     // max_position=100, max_order_size=50,
     // max_notional=500'000, rate_limit=100/sec, timeout=100ms.
-    ctx_ = mk::app::make_strategy_ctx<TestStrategy>(buf_.data(), 0, 0, 0,
-                                                    kTestMaxOutstanding,
-                                                    kTestMaxOutstanding,
-                                                    kTestWheelSize,
-                                                    kTestMaxTimers);
-    om_ = std::construct_at(reinterpret_cast<OM *>(om_storage_),
-                            ctx_,
+    ctx_ = mk::app::make_strategy_ctx<TestStrategy>(
+        buf_.data(), 0, 0, 0, kTestMaxOutstanding, kTestMaxOutstanding,
+        kTestWheelSize, kTestMaxTimers);
+    om_ = std::construct_at(reinterpret_cast<OM *>(om_storage_), ctx_,
                             /*max_position=*/100,
                             /*max_order_size=*/50,
                             /*max_notional=*/500'000,
@@ -57,7 +54,7 @@ protected:
 
   // Send a signal and return the generated NewOrder. Asserts success.
   mk::app::NewOrder send_order(std::uint32_t symbol_id, mk::algo::Side side,
-                                mk::algo::Price price, mk::algo::Qty qty = 10) {
+                               mk::algo::Price price, mk::algo::Qty qty = 10) {
     auto sig = make_signal(symbol_id, side, price, qty);
     mk::app::NewOrder order{};
     EXPECT_TRUE(om_->on_signal(sig, order));
@@ -75,7 +72,8 @@ protected:
 
   // Simulate a full fill from the exchange.
   void fill_order(std::uint64_t client_order_id, mk::algo::Qty fill_qty,
-                  mk::algo::Qty remaining = 0, mk::algo::Price fill_price = 10000) {
+                  mk::algo::Qty remaining = 0,
+                  mk::algo::Price fill_price = 10000) {
     mk::app::FillReport fill{};
     fill.client_order_id = client_order_id;
     fill.exchange_order_id = 1000;
@@ -89,10 +87,8 @@ protected:
   // TCP buffer sizes are zero — strategy thread TCP I/O is not exercised
   // in OrderManager tests. OMS state occupies the full buffer.
   std::array<std::byte,
-             mk::app::strategy_ctx_buf_size<TestStrategy>(0, 0, 0,
-                                                          kTestMaxOutstanding,
-                                                          kTestWheelSize,
-                                                          kTestMaxTimers)>
+             mk::app::strategy_ctx_buf_size<TestStrategy>(
+                 0, 0, 0, kTestMaxOutstanding, kTestWheelSize, kTestMaxTimers)>
       buf_{};
   mk::app::StrategyCtx ctx_{};
   alignas(OM) std::byte om_storage_[sizeof(OM)]{};
@@ -547,8 +543,8 @@ TEST_F(OrderManagerTest, RateLimitRejectAfterTokenExhaustion) {
   // fill them, repeat until bucket is exhausted. Runs in <10ms so no refill.
   // Alternate buy/sell each cycle to keep net_position bounded.
   for (int cycle = 0; cycle < 25; ++cycle) {
-    const auto side = (cycle % 2 == 0) ? mk::algo::Side::kBid
-                                       : mk::algo::Side::kAsk;
+    const auto side =
+        (cycle % 2 == 0) ? mk::algo::Side::kBid : mk::algo::Side::kAsk;
     // Send 4 orders.
     std::array<std::uint64_t, 4> ids{};
     for (int i = 0; i < 4; ++i) {

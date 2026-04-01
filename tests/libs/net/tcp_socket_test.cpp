@@ -86,7 +86,7 @@ TEST(TcpSocketTest, MoveConstructTransfersOwnership) {
 
   TcpSocket s1(a);
   const TcpSocket s2(std::move(s1));
-  EXPECT_FALSE(s1.is_valid());  // NOLINT(bugprone-use-after-move)
+  EXPECT_FALSE(s1.is_valid()); // NOLINT(bugprone-use-after-move)
   EXPECT_EQ(s2.get(), a);
 }
 
@@ -101,7 +101,7 @@ TEST(TcpSocketTest, MoveAssignClosePrevious) {
   const int old_fd = s2.get();
 
   s2 = std::move(s1);
-  EXPECT_FALSE(s1.is_valid());  // NOLINT(bugprone-use-after-move)
+  EXPECT_FALSE(s1.is_valid()); // NOLINT(bugprone-use-after-move)
   EXPECT_EQ(s2.get(), a1);
   // Old fd (a2) must be closed.
   EXPECT_EQ(fcntl(old_fd, F_GETFD), -1);
@@ -205,7 +205,7 @@ TEST(TcpSocketTest, ReceiveBlockingBlocksUntilDataArrives) {
   const char msg[] = "unblock me";
   std::atomic<bool> recv_started{false};
   TcpSocket::RecvResult recv_result{.status = TcpSocket::RecvStatus::kError,
-                                   .bytes_received = 0};
+                                    .bytes_received = 0};
   char recv_buf[64]{};
 
   std::jthread receiver_thread([&] {
@@ -244,7 +244,7 @@ TEST(TcpSocketTest, ReceiveBlockingAccumulatesPartialReads) {
   std::memset(send_buf + 10, 'B', 10);
 
   TcpSocket::RecvResult recv_result{.status = TcpSocket::RecvStatus::kError,
-                                   .bytes_received = 0};
+                                    .bytes_received = 0};
   char recv_buf[kTotalLen]{};
 
   std::jthread receiver_thread(
@@ -314,7 +314,7 @@ TEST(TcpSocketTest, SendLargePayloadBlocking) {
   }
 
   TcpSocket::SendResult send_result{.status = TcpSocket::SendStatus::kError,
-                                   .bytes_sent = 0};
+                                    .bytes_sent = 0};
   std::jthread sender_thread(
       [&] { send_result = sender.send_blocking(send_buf.data(), kSize); });
 
@@ -351,7 +351,7 @@ TEST(TcpSocketTest, SendBlockingBlocksUnderBackPressure) {
   }
 
   TcpSocket::SendResult send_result{.status = TcpSocket::SendStatus::kError,
-                                   .bytes_sent = 0};
+                                    .bytes_sent = 0};
   // std::jthread auto-joins on destruction, so early returns from
   // EXPECT_* won't leave a joinable thread (which would std::terminate).
   std::jthread sender_thread(

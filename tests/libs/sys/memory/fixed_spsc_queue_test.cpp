@@ -22,13 +22,18 @@
  *   4. Drain
  *   5. try_push_batch (partial and full)
  *   6. Multi-thread stress test (1 producer + 1 consumer)
+ *   7. Placement new in POSIX shared memory (cross-process IPC proof)
  */
 
 #include "sys/memory/fixed_spsc_queue.hpp"
 
+#include "sys/memory/mmap_region.hpp"
+
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <cstring>
+#include <string>
 #include <thread>
 
 // ============================================================================
@@ -236,4 +241,51 @@ TEST(FixedSPSCQueueStress, SingleProducerSingleConsumer) {
 
   std::uint64_t leftover = 0;
   EXPECT_FALSE(q.try_pop(leftover));
+}
+
+// ============================================================================
+// 7. Placement New in POSIX Shared Memory
+// ============================================================================
+//
+// FixedSPSCQueue works in shared memory because:
+//   - All state (head_, tail_, buf_) is inline in the struct (no pointers)
+//   - std::atomic<uint32_t> is lock-free on x86-64 (no mutex/futex)
+//   - MESI cache coherency operates on physical cache lines, not virtual
+//     address spaces — two processes mapping the same page see each other's
+//     stores the same way two threads do
+//
+// This test exercises the exact path used in cross-process IPC:
+//   shm_open → mmap → placement new → push/pop from separate mapping
+
+TEST(FixedSPSCQueueShmTest, PlacementNewInSharedMemory) {
+  using Queue = mk::sys::memory::FixedSPSCQueue<std::uint64_t, 64>;
+  static constexpr std::string_view kTestShmName = "/mk_test_fixed_spsc";
+  const auto size = sizeof(Queue);
+
+  // Producer side: create shared memory.
+  auto producer_region = mk::sys::memory::MmapRegion::open_shared(
+      kTestShmName, size, mk::sys::memory::ShmMode::kCreateOrOpen,
+      mk::sys::memory::PrefaultPolicy::kPopulateWrite);
+  ASSERT_TRUE(producer_region.has_value()) << "Failed to create shared memory";
+
+  // Placement new — construct the queue in shared memory.
+  // NOLINTNEXTLINE(*-owning-memory, bugprone-unchecked-optional-access)
+  auto *producer_q = new (producer_region->data()) Queue{};
+
+  // Consumer side: open existing shared memory (separate virtual mapping).
+  auto consumer_region = mk::sys::memory::MmapRegion::open_shared(
+      kTestShmName, size, mk::sys::memory::ShmMode::kOpenExisting,
+      mk::sys::memory::PrefaultPolicy::kPopulateRead);
+  ASSERT_TRUE(consumer_region.has_value());
+
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access, *-pro-type-reinterpret-cast)
+  auto *consumer_q = reinterpret_cast<Queue *>(consumer_region->data());
+
+  // Producer pushes through one mapping, consumer pops through another.
+  ASSERT_TRUE(producer_q->try_push(12345ULL));
+  std::uint64_t out = 0;
+  ASSERT_TRUE(consumer_q->try_pop(out));
+  EXPECT_EQ(out, 12345ULL);
+
+  ::shm_unlink(std::string(kTestShmName).c_str());
 }

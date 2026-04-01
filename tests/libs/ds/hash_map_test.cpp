@@ -5,35 +5,36 @@
  *
  * Test plan:
  *   Functional (mirror FixedHashMap tests):
- *     1.  FindOnEmptyReturnsNull
- *     2.  InsertAndFind
- *     3.  InsertDuplicateReturnsFalse
- *     4.  UpsertOverwrites (size unchanged)
- *     5.  EraseAndFind
- *     6.  EraseNonexistentReturnsFalse
- *     7.  CollisionHandling (ConstantHash forcing all keys to bucket 0)
- *     8.  TombstoneProbeChain (erase middle of chain, find past it)
- *     9.  LoadFactorRejection (fill to 70%, verify insert fails)
- *     10. ClearResetsEverything
- *     11. NeedsRebuild (exceed 20% tombstones)
- *     12. CustomHasherAndKeyEqual (composite OrderId key)
- *     13. TombstoneReuseOnInsert (tombstone_count decreases)
- *     14. ConstFind (const correctness)
- *     15. ManyInsertsThenLookups (500+ keys)
+ *     FindOnEmptyReturnsNull
+ *     InsertAndFind
+ *     InsertDuplicateReturnsFalse
+ *     UpsertOverwrites (size unchanged)
+ *     EraseAndFind
+ *     EraseNonexistentReturnsFalse
+ *     CollisionHandling (ConstantHash forcing all keys to bucket 0)
+ *     TombstoneProbeChain (erase middle of chain, find past it)
+ *     LoadFactorRejection (fill to 70%, verify insert fails)
+ *     ClearResetsEverything
+ *     NeedsRebuild (exceed 20% tombstones)
+ *     RebuildEliminatesTombstones
+ *     CustomHasherAndKeyEqual (composite OrderId key)
+ *     TombstoneReuseOnInsert (tombstone_count decreases)
+ *     ConstFind (const correctness)
+ *     ManyInsertsThenLookups (500+ keys)
  *   Factory validation:
- *     16. FactoryWorks
- *     17. FactoryRejectsNull
- *     18. FactoryRejectsSmallBuffer
- *     19. FactoryRejectsMisaligned
+ *     FactoryWorks
+ *     FactoryRejectsNull
+ *     FactoryRejectsSmallBuffer
+ *     FactoryRejectsMisaligned
  *   Move semantics:
- *     20. MoveConstructor
- *     21. MoveAssignment
+ *     MoveConstructor
+ *     MoveAssignment
  *   Static helpers:
- *     22. RoundUpCapacity
- *     23. RequiredBufferSize
- *     24. DefaultConstructedIsSafe
- *     25. MisalignedBufferAborts (death test)
- *     26. RoundUpCapacityOverflow
+ *     RoundUpCapacity
+ *     RequiredBufferSize
+ *     DefaultConstructedIsSafe
+ *     MisalignedBufferAborts (death test)
+ *     RoundUpCapacityOverflow
  */
 
 #include "ds/hash_map.hpp"
@@ -57,7 +58,7 @@ protected:
   void SetUp() override {
     auto opt = Map::create(buf_, sizeof(buf_), kCap);
     ASSERT_TRUE(opt.has_value());
-    map_ = std::move(*opt);  // NOLINT(bugprone-unchecked-optional-access)
+    map_ = std::move(*opt); // NOLINT(bugprone-unchecked-optional-access)
   }
 
   // buf_ declared before map_ for correct initialization order.
@@ -66,7 +67,7 @@ protected:
 };
 
 // =============================================================================
-// 1. FindOnEmptyReturnsNull
+// FindOnEmptyReturnsNull
 // =============================================================================
 
 TEST_F(HashMapTest, FindOnEmptyReturnsNull) {
@@ -76,7 +77,7 @@ TEST_F(HashMapTest, FindOnEmptyReturnsNull) {
 }
 
 // =============================================================================
-// 2. InsertAndFind
+// InsertAndFind
 // =============================================================================
 
 TEST_F(HashMapTest, InsertAndFind) {
@@ -90,7 +91,7 @@ TEST_F(HashMapTest, InsertAndFind) {
 }
 
 // =============================================================================
-// 3. InsertDuplicateReturnsFalse
+// InsertDuplicateReturnsFalse
 // =============================================================================
 
 TEST_F(HashMapTest, InsertDuplicateReturnsFalse) {
@@ -104,7 +105,7 @@ TEST_F(HashMapTest, InsertDuplicateReturnsFalse) {
 }
 
 // =============================================================================
-// 4. UpsertOverwrites
+// UpsertOverwrites
 // =============================================================================
 
 TEST_F(HashMapTest, UpsertOverwrites) {
@@ -124,7 +125,7 @@ TEST_F(HashMapTest, UpsertOverwrites) {
 }
 
 // =============================================================================
-// 5. EraseAndFind
+// EraseAndFind
 // =============================================================================
 
 TEST_F(HashMapTest, EraseAndFind) {
@@ -135,7 +136,7 @@ TEST_F(HashMapTest, EraseAndFind) {
 }
 
 // =============================================================================
-// 6. EraseNonexistentReturnsFalse
+// EraseNonexistentReturnsFalse
 // =============================================================================
 
 TEST_F(HashMapTest, EraseNonexistentReturnsFalse) {
@@ -144,13 +145,14 @@ TEST_F(HashMapTest, EraseNonexistentReturnsFalse) {
 }
 
 // =============================================================================
-// 7. CollisionHandling (ConstantHash forcing all keys to bucket 0)
+// CollisionHandling (ConstantHash forcing all keys to bucket 0)
 // =============================================================================
 
 namespace {
 
 struct ConstantHash {
-  [[nodiscard]] std::size_t operator()(std::uint64_t /*unused*/) const noexcept {
+  [[nodiscard]] std::size_t
+  operator()(std::uint64_t /*unused*/) const noexcept {
     return 0;
   }
 };
@@ -163,7 +165,7 @@ TEST(HashMapCollision, AllKeysCollide) {
   alignas(64) std::byte buf[Map::required_buffer_size(kCap)]{};
   auto opt = Map::create(buf, sizeof(buf), kCap);
   ASSERT_TRUE(opt.has_value());
-  auto &map = *opt;  // NOLINT(bugprone-unchecked-optional-access)
+  auto &map = *opt; // NOLINT(bugprone-unchecked-optional-access)
 
   for (std::uint64_t i = 0; i < 10; ++i) {
     ASSERT_TRUE(map.insert(i, i * 100));
@@ -180,7 +182,7 @@ TEST(HashMapCollision, AllKeysCollide) {
 }
 
 // =============================================================================
-// 8. TombstoneProbeChain
+// TombstoneProbeChain
 // =============================================================================
 
 TEST(HashMapCollision, TombstoneProbeChain) {
@@ -189,7 +191,7 @@ TEST(HashMapCollision, TombstoneProbeChain) {
   alignas(64) std::byte buf[Map::required_buffer_size(kCap)]{};
   auto opt = Map::create(buf, sizeof(buf), kCap);
   ASSERT_TRUE(opt.has_value());
-  auto &map = *opt;  // NOLINT(bugprone-unchecked-optional-access)
+  auto &map = *opt; // NOLINT(bugprone-unchecked-optional-access)
 
   ASSERT_TRUE(map.insert(1, 10));
   ASSERT_TRUE(map.insert(2, 20));
@@ -211,7 +213,7 @@ TEST(HashMapCollision, TombstoneProbeChain) {
 }
 
 // =============================================================================
-// 9. LoadFactorRejection
+// LoadFactorRejection
 // =============================================================================
 
 TEST_F(HashMapTest, LoadFactorRejection) {
@@ -241,7 +243,7 @@ TEST_F(HashMapTest, LoadFactorRejection) {
 }
 
 // =============================================================================
-// 10. ClearResetsEverything
+// ClearResetsEverything
 // =============================================================================
 
 TEST_F(HashMapTest, ClearResetsEverything) {
@@ -265,7 +267,7 @@ TEST_F(HashMapTest, ClearResetsEverything) {
 }
 
 // =============================================================================
-// 11. NeedsRebuild
+// NeedsRebuild
 // =============================================================================
 
 TEST_F(HashMapTest, NeedsRebuild) {
@@ -284,7 +286,54 @@ TEST_F(HashMapTest, NeedsRebuild) {
 }
 
 // =============================================================================
-// 12. CustomHasherAndKeyEqual
+// RebuildEliminatesTombstones
+// =============================================================================
+// Demonstrates the rebuild pattern for HashMap: create a new map on a fresh
+// buffer, re-insert live entries via for_each, verify tombstones are gone.
+
+TEST_F(HashMapTest, RebuildEliminatesTombstones) {
+  // Insert 8 keys, erase 5 → 5 tombstones, 3 live.
+  for (std::uint64_t i = 0; i < 8; ++i) {
+    ASSERT_TRUE(map_.insert(i, i * 10));
+  }
+  for (std::uint64_t i = 0; i < 5; ++i) {
+    ASSERT_TRUE(map_.erase(i));
+  }
+
+  EXPECT_EQ(3U, map_.size());
+  EXPECT_EQ(5U, map_.tombstone_count());
+  EXPECT_TRUE(map_.needs_rebuild());
+
+  // Rebuild: new buffer + new map + for_each re-insert.
+  alignas(64) std::byte rebuild_buf[Map::required_buffer_size(kCap)]{};
+  auto opt = Map::create(rebuild_buf, sizeof(rebuild_buf), kCap);
+  ASSERT_TRUE(opt.has_value());
+  auto rebuilt = std::move(*opt); // NOLINT(bugprone-unchecked-optional-access)
+
+  map_.for_each([&](const std::uint64_t &k, const std::uint64_t &v) {
+    ASSERT_TRUE(rebuilt.insert(k, v));
+  });
+
+  // Rebuilt map: same live data, zero tombstones.
+  EXPECT_EQ(3U, rebuilt.size());
+  EXPECT_EQ(0U, rebuilt.tombstone_count());
+  EXPECT_FALSE(rebuilt.needs_rebuild());
+
+  // Verify all live keys survived.
+  for (std::uint64_t i = 5; i < 8; ++i) {
+    const auto *val = rebuilt.find(i);
+    ASSERT_NE(nullptr, val);
+    EXPECT_EQ(i * 10, *val);
+  }
+
+  // Verify erased keys are gone.
+  for (std::uint64_t i = 0; i < 5; ++i) {
+    EXPECT_EQ(nullptr, rebuilt.find(i));
+  }
+}
+
+// =============================================================================
+// CustomHasherAndKeyEqual
 // =============================================================================
 
 namespace {
@@ -314,7 +363,7 @@ TEST(HashMapCustomKey, CompositeOrderIdKey) {
   alignas(64) std::byte buf[Map::required_buffer_size(kCap)]{};
   auto opt = Map::create(buf, sizeof(buf), kCap);
   ASSERT_TRUE(opt.has_value());
-  auto &map = *opt;  // NOLINT(bugprone-unchecked-optional-access)
+  auto &map = *opt; // NOLINT(bugprone-unchecked-optional-access)
 
   const OrderId id1{.symbol_id = 1, .seq_num = 1000};
   const OrderId id2{.symbol_id = 1, .seq_num = 1001};
@@ -343,7 +392,7 @@ TEST(HashMapCustomKey, CompositeOrderIdKey) {
 }
 
 // =============================================================================
-// 13. TombstoneReuseOnInsert
+// TombstoneReuseOnInsert
 // =============================================================================
 
 TEST(HashMapCollision, TombstoneReuseOnInsert) {
@@ -352,7 +401,7 @@ TEST(HashMapCollision, TombstoneReuseOnInsert) {
   alignas(64) std::byte buf[Map::required_buffer_size(kCap)]{};
   auto opt = Map::create(buf, sizeof(buf), kCap);
   ASSERT_TRUE(opt.has_value());
-  auto &map = *opt;  // NOLINT(bugprone-unchecked-optional-access)
+  auto &map = *opt; // NOLINT(bugprone-unchecked-optional-access)
 
   ASSERT_TRUE(map.insert(1, 10));
   ASSERT_TRUE(map.insert(2, 20));
@@ -382,7 +431,7 @@ TEST(HashMapCollision, TombstoneReuseOnInsert) {
 }
 
 // =============================================================================
-// 14. ConstFind
+// ConstFind
 // =============================================================================
 
 TEST_F(HashMapTest, ConstFind) {
@@ -397,7 +446,7 @@ TEST_F(HashMapTest, ConstFind) {
 }
 
 // =============================================================================
-// 15. ManyInsertsThenLookups
+// ManyInsertsThenLookups
 // =============================================================================
 
 TEST(HashMapLarge, ManyInsertsThenLookups) {
@@ -406,7 +455,7 @@ TEST(HashMapLarge, ManyInsertsThenLookups) {
   alignas(64) std::byte buf[Map::required_buffer_size(kCap)]{};
   auto opt = Map::create(buf, sizeof(buf), kCap);
   ASSERT_TRUE(opt.has_value());
-  auto &map = *opt;  // NOLINT(bugprone-unchecked-optional-access)
+  auto &map = *opt; // NOLINT(bugprone-unchecked-optional-access)
 
   // max_load = 1024 * 7 / 10 = 716. Insert 700.
   constexpr std::uint64_t kCount = 700;
@@ -426,7 +475,7 @@ TEST(HashMapLarge, ManyInsertsThenLookups) {
 }
 
 // =============================================================================
-// 16. FactoryWorks
+// FactoryWorks
 // =============================================================================
 
 TEST(HashMapFactory, FactoryWorks) {
@@ -435,17 +484,18 @@ TEST(HashMapFactory, FactoryWorks) {
   alignas(64) std::byte buf[Map::required_buffer_size(kCap)]{};
   auto opt = Map::create(buf, sizeof(buf), kCap);
   ASSERT_TRUE(opt.has_value());
-  EXPECT_EQ(kCap, opt->capacity());   // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_TRUE(opt->empty());           // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(kCap,
+            opt->capacity()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(opt->empty());  // NOLINT(bugprone-unchecked-optional-access)
 
-  ASSERT_TRUE(opt->insert(7, 77));     // NOLINT(bugprone-unchecked-optional-access)
-  auto *val = opt->find(7);            // NOLINT(bugprone-unchecked-optional-access)
+  ASSERT_TRUE(opt->insert(7, 77)); // NOLINT(bugprone-unchecked-optional-access)
+  auto *val = opt->find(7);        // NOLINT(bugprone-unchecked-optional-access)
   ASSERT_NE(nullptr, val);
   EXPECT_EQ(77U, *val);
 }
 
 // =============================================================================
-// 17. FactoryRejectsNull
+// FactoryRejectsNull
 // =============================================================================
 
 TEST(HashMapFactory, FactoryRejectsNull) {
@@ -455,7 +505,7 @@ TEST(HashMapFactory, FactoryRejectsNull) {
 }
 
 // =============================================================================
-// 18. FactoryRejectsSmallBuffer
+// FactoryRejectsSmallBuffer
 // =============================================================================
 
 TEST(HashMapFactory, FactoryRejectsSmallBuffer) {
@@ -466,7 +516,7 @@ TEST(HashMapFactory, FactoryRejectsSmallBuffer) {
 }
 
 // =============================================================================
-// 19. FactoryRejectsMisaligned
+// FactoryRejectsMisaligned
 // =============================================================================
 
 TEST(HashMapFactory, FactoryRejectsMisaligned) {
@@ -482,7 +532,7 @@ TEST(HashMapFactory, FactoryRejectsMisaligned) {
 }
 
 // =============================================================================
-// 20. MoveConstructor
+// MoveConstructor
 // =============================================================================
 
 TEST(HashMapMove, MoveConstructor) {
@@ -491,10 +541,12 @@ TEST(HashMapMove, MoveConstructor) {
   alignas(64) std::byte buf[Map::required_buffer_size(kCap)]{};
   auto opt = Map::create(buf, sizeof(buf), kCap);
   ASSERT_TRUE(opt.has_value());
-  ASSERT_TRUE(opt->insert(1, 100));     // NOLINT(bugprone-unchecked-optional-access)
-  ASSERT_TRUE(opt->insert(2, 200));     // NOLINT(bugprone-unchecked-optional-access)
+  ASSERT_TRUE(
+      opt->insert(1, 100)); // NOLINT(bugprone-unchecked-optional-access)
+  ASSERT_TRUE(
+      opt->insert(2, 200)); // NOLINT(bugprone-unchecked-optional-access)
 
-  Map moved(std::move(*opt));           // NOLINT(bugprone-unchecked-optional-access)
+  Map moved(std::move(*opt)); // NOLINT(bugprone-unchecked-optional-access)
 
   // Moved-to map has the data.
   EXPECT_EQ(kCap, moved.capacity());
@@ -509,12 +561,12 @@ TEST(HashMapMove, MoveConstructor) {
   EXPECT_EQ(200U, *v2);
 
   // Moved-from map is empty.
-  EXPECT_EQ(0U, opt->capacity());  // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(0U, opt->size());      // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(0U, opt->capacity()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(0U, opt->size());     // NOLINT(bugprone-unchecked-optional-access)
 }
 
 // =============================================================================
-// 21. MoveAssignment
+// MoveAssignment
 // =============================================================================
 
 TEST(HashMapMove, MoveAssignment) {
@@ -523,10 +575,11 @@ TEST(HashMapMove, MoveAssignment) {
   alignas(64) std::byte buf[Map::required_buffer_size(kCap)]{};
   auto opt = Map::create(buf, sizeof(buf), kCap);
   ASSERT_TRUE(opt.has_value());
-  ASSERT_TRUE(opt->insert(5, 500));  // NOLINT(bugprone-unchecked-optional-access)
+  ASSERT_TRUE(
+      opt->insert(5, 500)); // NOLINT(bugprone-unchecked-optional-access)
 
   Map target;
-  target = std::move(*opt);         // NOLINT(bugprone-unchecked-optional-access)
+  target = std::move(*opt); // NOLINT(bugprone-unchecked-optional-access)
 
   EXPECT_EQ(kCap, target.capacity());
   EXPECT_EQ(1U, target.size());
@@ -535,12 +588,12 @@ TEST(HashMapMove, MoveAssignment) {
   EXPECT_EQ(500U, *val);
 
   // Moved-from is empty.
-  EXPECT_EQ(0U, opt->capacity());  // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(0U, opt->size());      // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(0U, opt->capacity()); // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(0U, opt->size());     // NOLINT(bugprone-unchecked-optional-access)
 }
 
 // =============================================================================
-// 22. RoundUpCapacity
+// RoundUpCapacity
 // =============================================================================
 
 TEST(HashMapStatic, RoundUpCapacity) {
@@ -558,7 +611,7 @@ TEST(HashMapStatic, RoundUpCapacity) {
 }
 
 // =============================================================================
-// 23. RequiredBufferSize
+// RequiredBufferSize
 // =============================================================================
 
 TEST(HashMapStatic, RequiredBufferSize) {
@@ -569,7 +622,7 @@ TEST(HashMapStatic, RequiredBufferSize) {
 }
 
 // =============================================================================
-// 24. DefaultConstructedIsSafe
+// DefaultConstructedIsSafe
 // =============================================================================
 
 TEST(HashMapSpecial, DefaultConstructedIsSafe) {
@@ -588,7 +641,7 @@ TEST(HashMapSpecial, DefaultConstructedIsSafe) {
 }
 
 // =============================================================================
-// 25. MisalignedBufferAborts (death test)
+// MisalignedBufferAborts (death test)
 // =============================================================================
 
 TEST(HashMapDeathTest, MisalignedBufferAborts) {
@@ -599,7 +652,7 @@ TEST(HashMapDeathTest, MisalignedBufferAborts) {
 }
 
 // =============================================================================
-// 26. RoundUpCapacityOverflow
+// RoundUpCapacityOverflow
 // =============================================================================
 
 TEST(HashMapStatic, RoundUpCapacityOverflow) {
@@ -611,7 +664,7 @@ TEST(HashMapStatic, RoundUpCapacityOverflow) {
 }
 
 // =============================================================================
-// 27. ForEachVisitsAllEntries
+// ForEachVisitsAllEntries
 // =============================================================================
 
 TEST(HashMapForEach, ForEachVisitsAllEntries) {
@@ -644,7 +697,7 @@ TEST(HashMapForEach, ForEachVisitsAllEntries) {
 }
 
 // =============================================================================
-// 28. ForEachSkipsTombstones
+// ForEachSkipsTombstones
 // =============================================================================
 
 TEST(HashMapForEach, ForEachSkipsTombstones) {
@@ -674,7 +727,7 @@ TEST(HashMapForEach, ForEachSkipsTombstones) {
 }
 
 // =============================================================================
-// 29. ForEachOnEmpty
+// ForEachOnEmpty
 // =============================================================================
 
 TEST(HashMapForEach, ForEachOnEmpty) {
@@ -694,7 +747,7 @@ TEST(HashMapForEach, ForEachOnEmpty) {
 }
 
 // =============================================================================
-// 30. ConstForEach
+// ConstForEach
 // =============================================================================
 
 TEST(HashMapForEach, ConstForEach) {

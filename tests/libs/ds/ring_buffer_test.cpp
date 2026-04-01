@@ -28,7 +28,7 @@ protected:
   void SetUp() override {
     auto opt = RB::create(buf_, sizeof(buf_), kCap);
     ASSERT_TRUE(opt.has_value());
-    rb_ = std::move(*opt);  // NOLINT(bugprone-unchecked-optional-access)
+    rb_ = std::move(*opt); // NOLINT(bugprone-unchecked-optional-access)
   }
 
   alignas(64) std::byte buf_[RB::required_buffer_size(kCap)]{};
@@ -292,7 +292,7 @@ TEST(RingBufferStandaloneTest, PushRvalueOverload) {
 
   auto opt = RB::create(buf, sizeof(buf), kCap);
   ASSERT_TRUE(opt.has_value());
-  auto rb = std::move(*opt);  // NOLINT(bugprone-unchecked-optional-access)
+  auto rb = std::move(*opt); // NOLINT(bugprone-unchecked-optional-access)
 
   const Tick t{.price = 100, .quantity = 50};
   rb.push(t);
@@ -328,7 +328,7 @@ TEST_F(RingBufferTest, OverwriteWrapAround) {
 
   auto opt = RB4::create(buf4, sizeof(buf4), kCap4);
   ASSERT_TRUE(opt.has_value());
-  auto rb4 = std::move(*opt);  // NOLINT(bugprone-unchecked-optional-access)
+  auto rb4 = std::move(*opt); // NOLINT(bugprone-unchecked-optional-access)
 
   // Push 6: [0, 1, 2, 3, 4, 5]
   for (int i = 0; i < 6; ++i) {
@@ -361,7 +361,7 @@ TEST(RingBufferStandaloneTest, LargeBufferStress) {
 
   auto opt = RB::create(buf, sizeof(buf), kCap);
   ASSERT_TRUE(opt.has_value());
-  auto rb = std::move(*opt);  // NOLINT(bugprone-unchecked-optional-access)
+  auto rb = std::move(*opt); // NOLINT(bugprone-unchecked-optional-access)
 
   for (int i = 0; i < kTotal; ++i) {
     rb.push(i);
@@ -394,8 +394,9 @@ TEST(RingBufferFactoryTest, FactoryWorks) {
 
   auto opt = RB::create(buf, sizeof(buf), kCap);
   ASSERT_TRUE(opt.has_value());
-  EXPECT_EQ(opt->capacity(), kCap);  // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_TRUE(opt->empty());          // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_EQ(opt->capacity(), kCap);
+  EXPECT_TRUE(opt->empty()); // NOLINT(bugprone-unchecked-optional-access)
 }
 
 TEST(RingBufferFactoryTest, FactoryRejectsNull) {
@@ -453,7 +454,7 @@ TEST(RingBufferMoveTest, MoveConstructor) {
 
   auto opt = RB::create(buf, sizeof(buf), kCap);
   ASSERT_TRUE(opt.has_value());
-  auto src = std::move(*opt);  // NOLINT(bugprone-unchecked-optional-access)
+  auto src = std::move(*opt); // NOLINT(bugprone-unchecked-optional-access)
 
   src.push(10);
   src.push(20);
@@ -479,7 +480,7 @@ TEST(RingBufferMoveTest, MoveAssignment) {
 
   auto opt = RB::create(buf, sizeof(buf), kCap);
   ASSERT_TRUE(opt.has_value());
-  auto src = std::move(*opt);  // NOLINT(bugprone-unchecked-optional-access)
+  auto src = std::move(*opt); // NOLINT(bugprone-unchecked-optional-access)
 
   src.push(10);
   src.push(20);
@@ -592,7 +593,7 @@ TEST(RingBufferDeathTest, FrontOnEmpty) {
         using RB = RingBuffer<int>;
         alignas(64) std::byte buf[RB::required_buffer_size(4)]{};
         auto opt = RB::create(buf, sizeof(buf), 4);
-        (void)opt->front();  // NOLINT(bugprone-unchecked-optional-access)
+        (void)opt->front(); // NOLINT(bugprone-unchecked-optional-access)
       },
       "");
 }
@@ -603,7 +604,7 @@ TEST(RingBufferDeathTest, BackOnEmpty) {
         using RB = RingBuffer<int>;
         alignas(64) std::byte buf[RB::required_buffer_size(4)]{};
         auto opt = RB::create(buf, sizeof(buf), 4);
-        (void)opt->back();  // NOLINT(bugprone-unchecked-optional-access)
+        (void)opt->back(); // NOLINT(bugprone-unchecked-optional-access)
       },
       "");
 }
@@ -614,7 +615,7 @@ TEST(RingBufferDeathTest, PopFrontOnEmpty) {
         using RB = RingBuffer<int>;
         alignas(64) std::byte buf[RB::required_buffer_size(4)]{};
         auto opt = RB::create(buf, sizeof(buf), 4);
-        opt->pop_front();  // NOLINT(bugprone-unchecked-optional-access)
+        opt->pop_front(); // NOLINT(bugprone-unchecked-optional-access)
       },
       "");
 }
@@ -625,8 +626,9 @@ TEST(RingBufferDeathTest, SubscriptOutOfBounds) {
         using RB = RingBuffer<int>;
         alignas(64) std::byte buf[RB::required_buffer_size(4)]{};
         auto opt = RB::create(buf, sizeof(buf), 4);
-        opt->push(42);    // NOLINT(bugprone-unchecked-optional-access)
-        (void)(*opt)[1]; // size() == 1, index 1 is out of bounds  // NOLINT(bugprone-unchecked-optional-access)
+        opt->push(42); // NOLINT(bugprone-unchecked-optional-access)
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        (void)(*opt)[1]; // size() == 1, index 1 is out of bounds
       },
       "");
 }

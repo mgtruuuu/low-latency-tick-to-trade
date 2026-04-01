@@ -32,8 +32,8 @@ TEST(AlignedArrayDeleterTest, ConstructAndDestruct) {
   constexpr std::size_t kSize = 1024;
 
   // If new/delete alignment is mismatched, ASan will catch it.
-  AlignedByteArray<kAlign> const buf{
-      new (std::align_val_t{kAlign}) std::byte[kSize]};
+  AlignedByteArray<kAlign> const buf{new (std::align_val_t{kAlign})
+                                         std::byte[kSize]};
   ASSERT_NE(buf.get(), nullptr);
 }
 
@@ -45,13 +45,13 @@ TEST(AlignedArrayDeleterTest, MemoryIsAligned) {
   constexpr std::size_t kAlign = 64;
   constexpr std::size_t kSize = 256;
 
-  AlignedByteArray<kAlign> const buf{
-      new (std::align_val_t{kAlign}) std::byte[kSize]};
+  AlignedByteArray<kAlign> const buf{new (std::align_val_t{kAlign})
+                                         std::byte[kSize]};
 
   auto addr = reinterpret_cast<std::uintptr_t>(buf.get());
   EXPECT_EQ(addr % kAlign, 0U)
-      << "Buffer at 0x" << std::hex << addr << " is not " << std::dec
-      << kAlign << "-byte aligned";
+      << "Buffer at 0x" << std::hex << addr << " is not " << std::dec << kAlign
+      << "-byte aligned";
 }
 
 // =============================================================================
@@ -62,8 +62,8 @@ TEST(AlignedArrayDeleterTest, ReadWriteContents) {
   constexpr std::size_t kAlign = 64;
   constexpr std::size_t kSize = 128;
 
-  AlignedByteArray<kAlign> const buf{
-      new (std::align_val_t{kAlign}) std::byte[kSize]};
+  AlignedByteArray<kAlign> const buf{new (std::align_val_t{kAlign})
+                                         std::byte[kSize]};
 
   // Write a known pattern.
   std::memset(buf.get(), 0xAB, kSize);
@@ -82,8 +82,8 @@ TEST(AlignedArrayDeleterTest, DefaultAlignment) {
   constexpr std::size_t kSize = 512;
 
   // AlignedByteArray<> defaults to alignof(std::max_align_t).
-  AlignedByteArray<> const buf{
-      new (std::align_val_t{alignof(std::max_align_t)}) std::byte[kSize]};
+  AlignedByteArray<> const buf{new (std::align_val_t{alignof(std::max_align_t)})
+                                   std::byte[kSize]};
   ASSERT_NE(buf.get(), nullptr);
 
   auto addr = reinterpret_cast<std::uintptr_t>(buf.get());
@@ -98,8 +98,7 @@ TEST(AlignedArrayDeleterTest, MoveTransfersOwnership) {
   constexpr std::size_t kAlign = 64;
   constexpr std::size_t kSize = 256;
 
-  AlignedByteArray<kAlign> a{
-      new (std::align_val_t{kAlign}) std::byte[kSize]};
+  AlignedByteArray<kAlign> a{new (std::align_val_t{kAlign}) std::byte[kSize]};
   auto *raw = a.get();
   ASSERT_NE(raw, nullptr);
 

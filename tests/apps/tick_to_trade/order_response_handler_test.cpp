@@ -18,9 +18,7 @@
 
 #include "net/message_codec.hpp"
 
-#include "sys/log/async_log_entry.hpp"
-#include "sys/log/log_macros.hpp"
-#include "sys/memory/spsc_queue.hpp"
+#include "tick_to_trade/pipeline_log_entry.hpp"
 
 #include <array>
 #include <cstddef>
@@ -59,7 +57,8 @@ PayloadBuf serialize_into(const T &msg, SerializeFn fn) {
   return buf;
 }
 
-net::ParsedMessageView make_view(MsgType type, std::span<const std::byte> payload) {
+net::ParsedMessageView make_view(MsgType type,
+                                 std::span<const std::byte> payload) {
   net::ParsedMessageView view;
   view.header.msg_type = static_cast<std::uint16_t>(type);
   view.header.payload_len = static_cast<std::uint32_t>(payload.size());
@@ -77,25 +76,21 @@ protected:
     ctx_ = make_strategy_ctx<TestStrategy>(ctx_buf_.data(), 0, 0, 0,
                                            kMaxOutstanding, kMaxOutstanding,
                                            kWheelSize, kMaxTimers);
-    om_ = std::construct_at(
-        reinterpret_cast<OrderManager *>(om_storage_),
-        ctx_,
-        /*max_position=*/1000,
-        /*max_order_size=*/100,
-        /*max_notional=*/10'000'000,
-        /*max_orders_per_window=*/100,
-        /*rate_window_ns=*/1'000'000'000,
-        /*order_timeout_ns=*/kTimeoutNs);
+    om_ = std::construct_at(reinterpret_cast<OrderManager *>(om_storage_), ctx_,
+                            /*max_position=*/1000,
+                            /*max_order_size=*/100,
+                            /*max_notional=*/10'000'000,
+                            /*max_orders_per_window=*/100,
+                            /*rate_window_ns=*/1'000'000'000,
+                            /*order_timeout_ns=*/kTimeoutNs);
   }
 
   void TearDown() override { std::destroy_at(om_); }
 
   // Send a new order through OrderManager and return its client_order_id.
   std::uint64_t send_order() {
-    const Signal sig{.side = algo::Side::kBid,
-                     .price = 10000,
-                     .qty = 10,
-                     .symbol_id = 1};
+    const Signal sig{
+        .side = algo::Side::kBid, .price = 10000, .qty = 10, .symbol_id = 1};
     NewOrder order{};
     EXPECT_TRUE(om_->on_signal(sig, order));
     return order.client_order_id;
@@ -110,9 +105,8 @@ protected:
   }
 
   // -- Members --
-  std::array<std::byte,
-             strategy_ctx_buf_size<TestStrategy>(0, 0, 0, kMaxOutstanding,
-                                                 kWheelSize, kMaxTimers)>
+  std::array<std::byte, strategy_ctx_buf_size<TestStrategy>(
+                            0, 0, 0, kMaxOutstanding, kWheelSize, kMaxTimers)>
       ctx_buf_{};
   StrategyCtx ctx_{};
   alignas(OrderManager) std::byte om_storage_[sizeof(OrderManager)]{};
@@ -123,9 +117,9 @@ protected:
   ConnectionState conn_;
 
   // LogQueue: non-owning SPSCQueue backed by stack buffer.
-  std::array<sys::log::LogEntry, 16> log_buf_{};
-  std::optional<sys::log::LogQueue> log_queue_{
-      sys::log::LogQueue::create(log_buf_.data(), 16)};
+  std::array<LogEntry, 16> log_buf_{};
+  std::optional<PipelineLogQueue> log_queue_{
+      PipelineLogQueue::create(log_buf_.data(), sizeof(log_buf_), 16)};
 };
 
 // ---------------------------------------------------------------------------
@@ -142,8 +136,8 @@ TEST_F(OrderResponseHandlerTest, OrderAckDispatchesAndResetsRejectCounter) {
   auto payload = serialize_into(ack, serialize_order_ack);
   ASSERT_GT(payload.len, 0U);
 
-  EXPECT_FALSE(dispatch(MsgType::kOrderAck,
-                        {payload.bytes.data(), payload.len}));
+  EXPECT_FALSE(
+      dispatch(MsgType::kOrderAck, {payload.bytes.data(), payload.len}));
   EXPECT_EQ(handler_.consecutive_rejects(), 0U);
   // OrderAck dispatched — outstanding order should have exchange_id set.
   EXPECT_EQ(om_->outstanding_count(), 1U);
@@ -163,8 +157,8 @@ TEST_F(OrderResponseHandlerTest, OrderRejectIncrementsConsecutiveRejects) {
   auto payload = serialize_into(rej, serialize_order_reject);
   ASSERT_GT(payload.len, 0U);
 
-  EXPECT_FALSE(dispatch(MsgType::kOrderReject,
-                        {payload.bytes.data(), payload.len}));
+  EXPECT_FALSE(
+      dispatch(MsgType::kOrderReject, {payload.bytes.data(), payload.len}));
   EXPECT_EQ(handler_.consecutive_rejects(), 1U);
 }
 
@@ -179,8 +173,8 @@ TEST_F(OrderResponseHandlerTest, FiveConsecutiveRejectsTriggersKillSwitch) {
     rej.send_ts = 0;
     auto payload = serialize_into(rej, serialize_order_reject);
 
-    const bool kill = dispatch(MsgType::kOrderReject,
-                               {payload.bytes.data(), payload.len});
+    const bool kill =
+        dispatch(MsgType::kOrderReject, {payload.bytes.data(), payload.len});
     EXPECT_FALSE(kill) << "Should not trigger at reject #" << (i + 1);
   }
   EXPECT_EQ(handler_.consecutive_rejects(), 4U);
@@ -194,8 +188,8 @@ TEST_F(OrderResponseHandlerTest, FiveConsecutiveRejectsTriggersKillSwitch) {
   rej5.send_ts = 0;
   auto payload5 = serialize_into(rej5, serialize_order_reject);
 
-  EXPECT_TRUE(dispatch(MsgType::kOrderReject,
-                       {payload5.bytes.data(), payload5.len}));
+  EXPECT_TRUE(
+      dispatch(MsgType::kOrderReject, {payload5.bytes.data(), payload5.len}));
   EXPECT_EQ(handler_.consecutive_rejects(), 5U);
 }
 
@@ -208,8 +202,8 @@ TEST_F(OrderResponseHandlerTest, AckResetsRejectCounterBeforeThreshold) {
     rej.reason = RejectReason::kUnknown;
     rej.send_ts = 0;
     auto payload = serialize_into(rej, serialize_order_reject);
-    EXPECT_FALSE(dispatch(MsgType::kOrderReject,
-                          {payload.bytes.data(), payload.len}));
+    EXPECT_FALSE(
+        dispatch(MsgType::kOrderReject, {payload.bytes.data(), payload.len}));
   }
   EXPECT_EQ(handler_.consecutive_rejects(), 3U);
 
@@ -242,8 +236,8 @@ TEST_F(OrderResponseHandlerTest, FillReportDispatchesAndResetsRejects) {
   auto payload = serialize_into(fill, serialize_fill_report);
   ASSERT_GT(payload.len, 0U);
 
-  EXPECT_FALSE(dispatch(MsgType::kFillReport,
-                        {payload.bytes.data(), payload.len}));
+  EXPECT_FALSE(
+      dispatch(MsgType::kFillReport, {payload.bytes.data(), payload.len}));
   EXPECT_EQ(handler_.consecutive_rejects(), 0U);
   EXPECT_EQ(om_->outstanding_count(), 0U);
 }
@@ -296,8 +290,8 @@ TEST_F(OrderResponseHandlerTest, CancelAckDispatches) {
   auto payload = serialize_into(cancel_ack, serialize_cancel_ack);
   ASSERT_GT(payload.len, 0U);
 
-  EXPECT_FALSE(dispatch(MsgType::kCancelAck,
-                        {payload.bytes.data(), payload.len}));
+  EXPECT_FALSE(
+      dispatch(MsgType::kCancelAck, {payload.bytes.data(), payload.len}));
   EXPECT_EQ(om_->outstanding_count(), 0U);
 }
 
@@ -311,8 +305,8 @@ TEST_F(OrderResponseHandlerTest, CancelRejectDispatches) {
   auto payload = serialize_into(cr, serialize_cancel_reject);
   ASSERT_GT(payload.len, 0U);
 
-  EXPECT_FALSE(dispatch(MsgType::kCancelReject,
-                        {payload.bytes.data(), payload.len}));
+  EXPECT_FALSE(
+      dispatch(MsgType::kCancelReject, {payload.bytes.data(), payload.len}));
 }
 
 // ---------------------------------------------------------------------------
@@ -329,8 +323,8 @@ TEST_F(OrderResponseHandlerTest, ModifyAckDispatches) {
   auto payload = serialize_into(mack, serialize_modify_ack);
   ASSERT_GT(payload.len, 0U);
 
-  EXPECT_FALSE(dispatch(MsgType::kModifyAck,
-                        {payload.bytes.data(), payload.len}));
+  EXPECT_FALSE(
+      dispatch(MsgType::kModifyAck, {payload.bytes.data(), payload.len}));
   EXPECT_EQ(om_->modifies_acked(), 1U);
 }
 
@@ -344,8 +338,8 @@ TEST_F(OrderResponseHandlerTest, ModifyRejectDispatches) {
   auto payload = serialize_into(mrej, serialize_modify_reject);
   ASSERT_GT(payload.len, 0U);
 
-  EXPECT_FALSE(dispatch(MsgType::kModifyReject,
-                        {payload.bytes.data(), payload.len}));
+  EXPECT_FALSE(
+      dispatch(MsgType::kModifyReject, {payload.bytes.data(), payload.len}));
 }
 
 // ---------------------------------------------------------------------------

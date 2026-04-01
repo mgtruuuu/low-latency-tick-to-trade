@@ -11,8 +11,8 @@ namespace {
 
 constexpr auto kBtcUsd = pack_string("BTC-USD");
 constexpr auto kEthUsd = pack_string("ETH-USD");
-constexpr auto kEmpty  = pack_string("");
-constexpr auto kMax8   = pack_string("ABCDEFGH"); // exactly 8 chars
+constexpr auto kEmpty = pack_string("");
+constexpr auto kMax8 = pack_string("ABCDEFGH"); // exactly 8 chars
 constexpr auto kSingle = pack_string("X");
 
 static_assert(kBtcUsd != 0);
@@ -105,9 +105,12 @@ TEST(StringPackTest, SwitchDispatch) {
 
   auto classify = [](std::uint64_t id) -> int {
     switch (id) {
-    case kAapl: return 1;
-    case kMsft: return 2;
-    default: return 0;
+    case kAapl:
+      return 1;
+    case kMsft:
+      return 2;
+    default:
+      return 0;
     }
   };
 

@@ -133,6 +133,10 @@ class HashMap {
   }
 
   /// Find a slot for inserting 'key'. Returns {index, found_existing}.
+  ///
+  /// Note: tombstone reuse adds a branch per probe step. On a hot path where
+  /// inserts are rare or rebuilds are cheap, skip tombstone reuse and let
+  /// the cold-path rebuild reclaim them instead.
   struct ProbeInsertResult {
     std::size_t idx;
     bool found_existing;
@@ -177,11 +181,6 @@ class HashMap {
            c <= std::numeric_limits<std::uint32_t>::max();
   }
 
-  static void abort_if_invalid_capacity(std::size_t capacity) noexcept {
-    if (!is_valid_capacity(capacity)) {
-      std::abort();
-    }
-  }
 
 public:
   /// Result of an upsert operation. Three-way return distinguishes successful
@@ -278,8 +277,8 @@ public:
   /// acceptable). Prefer create() when graceful error handling is needed.
   HashMap(void *external_buf, std::size_t buf_size_bytes,
           std::size_t capacity) noexcept {
-    abort_if_invalid_capacity(capacity);
-    if (external_buf == nullptr || buf_size_bytes < capacity * sizeof(Slot) ||
+    if (!is_valid_capacity(capacity) || external_buf == nullptr ||
+        buf_size_bytes < capacity * sizeof(Slot) ||
         reinterpret_cast<std::uintptr_t>(external_buf) % alignof(Slot) != 0) {
       std::abort();
     }

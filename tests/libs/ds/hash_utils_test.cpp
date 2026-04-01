@@ -1,7 +1,7 @@
 /**
  * @file hash_utils_test.cpp
- * @brief GTest-based tests for hash_utils.hpp — mix64, hash_combine_u64,
- * finalize_hash, fnv1a_hash, DefaultHash.
+ * @brief GTest-based tests for hash_utils.hpp — mix64, SplitMix64,
+ * hash_combine_u64, finalize_hash, fnv1a_hash, DefaultHash.
  *
  * Test plan:
  *   mix64:
@@ -10,26 +10,32 @@
  *     3. Constexpr           — usable at compile time
  *     4. SingleBitAvalanche  — flipping one input bit changes many output bits
  *
+ *   SplitMix64:
+ *     5. KnownSequence       — canonical SplitMix64 outputs for seed 0
+ *     6. DifferentSeeds      — different seeds produce different sequences
+ *     7. Constexpr           — usable at compile time
+ *
  *   hash_combine_u64:
- *     5. OrderSensitive      — combine(a, b) != combine(b, a)
- *     6. SameValueNonZero    — combine(v, v) != 0 (unlike plain XOR)
+ *     8. OrderSensitive      — combine(a, b) != combine(b, a)
+ *     9. SameValueNonZero    — combine(v, v) != 0 (unlike plain XOR)
  *
  *   finalize_hash:
- *     7. NonZeroInput        — finalize_hash(non-zero) != 0
- *     8. Constexpr           — usable at compile time
- *     9. DiffersFromInput    — finalize_hash(h) != h for structured inputs
+ *    10. NonZeroInput        — finalize_hash(non-zero) != 0
+ *    11. Constexpr           — usable at compile time
+ *    12. DiffersFromInput    — finalize_hash(h) != h for structured inputs
  *
  *   fnv1a_hash:
- *    10. EmptySpan           — empty input returns FNV offset constant
- *    11. Deterministic       — same input always produces same output
- *    12. Distinct            — different byte sequences produce different hashes
- *    13. Constexpr           — usable at compile time
+ *    13. EmptySpan           — empty input returns FNV offset constant
+ *    14. Deterministic       — same input always produces same output
+ *    15. Distinct            — different byte sequences produce different
+ * hashes
+ *    16. Constexpr           — usable at compile time
  *
  *   DefaultHash:
- *    14. IntegralTypes       — works for int, uint64_t, int8_t
- *    15. NonIntegralType     — works for std::string_view (delegates to
+ *    17. IntegralTypes       — works for int, uint64_t, int8_t
+ *    18. NonIntegralType     — works for std::string_view (delegates to
  * std::hash)
- *    16. DifferentFromIdentity — hash(k) != k for small integers
+ *    19. DifferentFromIdentity — hash(k) != k for small integers
  */
 
 #include "ds/hash_utils.hpp"
@@ -100,6 +106,36 @@ TEST(Mix64Test, SingleBitAvalanche) {
 }
 
 // =============================================================================
+// SplitMix64 tests
+// =============================================================================
+
+TEST(SplitMix64Test, KnownSequence) {
+  mk::ds::SplitMix64 gen{0};
+
+  EXPECT_EQ(0xE220A8397B1DCDAFULL, gen.next());
+  EXPECT_EQ(0x6E789E6AA1B965F4ULL, gen.next());
+  EXPECT_EQ(0x06C45D188009454FULL, gen.next());
+}
+
+TEST(SplitMix64Test, DifferentSeeds) {
+  mk::ds::SplitMix64 gen_a{0x123456789ABCDEF0ULL};
+  mk::ds::SplitMix64 gen_b{0x123456789ABCDEE0ULL};
+
+  EXPECT_NE(gen_a.next(), gen_b.next());
+}
+
+TEST(SplitMix64Test, Constexpr) {
+  constexpr std::uint64_t kFirst = [] {
+    mk::ds::SplitMix64 gen{0};
+    return gen.next();
+  }();
+
+  static_assert(kFirst == 0xE220A8397B1DCDAFULL,
+                "SplitMix64 seed 0 first output must match canonical sequence");
+  EXPECT_EQ(0xE220A8397B1DCDAFULL, kFirst);
+}
+
+// =============================================================================
 // hash_combine_u64 tests
 // =============================================================================
 
@@ -139,7 +175,8 @@ TEST(FinalizeHashTest, NonZeroInput) {
 
 TEST(FinalizeHashTest, Constexpr) {
   constexpr auto kH = mk::ds::finalize_hash(42);
-  static_assert(kH != 0, "finalize_hash(42) should be non-zero at compile time");
+  static_assert(kH != 0,
+                "finalize_hash(42) should be non-zero at compile time");
   EXPECT_NE(0U, kH);
 }
 
@@ -179,9 +216,12 @@ TEST(Fnv1aHashTest, Deterministic) {
 
 TEST(Fnv1aHashTest, Distinct) {
   // Different byte sequences must (almost certainly) produce different hashes.
-  const std::array<std::byte, 3> bytes_a{std::byte{'a'}, std::byte{'b'}, std::byte{'c'}};
-  const std::array<std::byte, 3> bytes_b{std::byte{'a'}, std::byte{'b'}, std::byte{'d'}};
-  const std::array<std::byte, 3> bytes_c{std::byte{'c'}, std::byte{'b'}, std::byte{'a'}};
+  const std::array<std::byte, 3> bytes_a{std::byte{'a'}, std::byte{'b'},
+                                         std::byte{'c'}};
+  const std::array<std::byte, 3> bytes_b{std::byte{'a'}, std::byte{'b'},
+                                         std::byte{'d'}};
+  const std::array<std::byte, 3> bytes_c{std::byte{'c'}, std::byte{'b'},
+                                         std::byte{'a'}};
 
   EXPECT_NE(mk::ds::fnv1a_hash(bytes_a), mk::ds::fnv1a_hash(bytes_b));
   // Order sensitivity: "abc" != "cba"
@@ -190,7 +230,9 @@ TEST(Fnv1aHashTest, Distinct) {
 
 TEST(Fnv1aHashTest, Constexpr) {
   constexpr std::array<std::byte, 3> kData{
-      std::byte{'H'}, std::byte{'F'}, std::byte{'T'},
+      std::byte{'H'},
+      std::byte{'F'},
+      std::byte{'T'},
   };
   constexpr auto kH = mk::ds::fnv1a_hash(kData);
   static_assert(kH != 0, "fnv1a_hash should be non-zero at compile time");

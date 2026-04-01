@@ -90,6 +90,4 @@ TEST(Xorshift64Test, ConstexprEvaluation) {
 
 using Xorshift64DeathTest = ::testing::Test;
 
-TEST(Xorshift64DeathTest, ZeroSeedAborts) {
-  EXPECT_DEATH(Xorshift64{0}, "");
-}
+TEST(Xorshift64DeathTest, ZeroSeedAborts) { EXPECT_DEATH(Xorshift64{0}, ""); }

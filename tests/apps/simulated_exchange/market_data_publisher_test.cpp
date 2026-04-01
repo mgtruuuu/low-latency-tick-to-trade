@@ -9,75 +9,21 @@
 
 #include "simulated_exchange/market_data_publisher.hpp"
 
+#include "mock_udp_socket.hpp"
 #include "shared/protocol.hpp"
 #include "shared/protocol_codec.hpp"
 
-#include <arpa/inet.h>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <gtest/gtest.h>
 #include <span>
-#include <string>
-#include <vector>
 
 namespace mk::app {
 namespace {
 
-// =============================================================================
-// MockUdpSocket — satisfies net::UdpSendable concept
-// =============================================================================
-// Records all sent datagrams for inspection instead of performing real I/O.
-// Each Packet stores a copy of the raw bytes and the destination address.
-
-struct MockUdpSocket {
-  enum class SendtoStatus { kOk, kWouldBlock, kError };
-
-  struct SendtoResult {
-    SendtoStatus status = SendtoStatus::kError;
-    int err_no = 0;
-  };
-
-  struct Packet {
-    std::vector<std::byte> data;
-    sockaddr_in dest;
-  };
-
-  // All sent packets, available for test assertions.
-  std::vector<Packet> sent_packets;
-
-  // If true, sendto_nonblocking returns kError to simulate failure.
-  bool fail_sends = false;
-
-  SendtoResult sendto_nonblocking(const char *buf, std::size_t len,
-                                  const sockaddr_in &dest) noexcept {
-    if (fail_sends) {
-      return {.status = SendtoStatus::kError, .err_no = 11 /* EAGAIN */};
-    }
-
-    sent_packets.push_back(
-        {.data = {reinterpret_cast<const std::byte *>(buf),
-                  reinterpret_cast<const std::byte *>(buf) + len},
-         .dest = dest});
-    return {.status = SendtoStatus::kOk, .err_no = 0};
-  }
-};
-
-// Verify MockUdpSocket satisfies the concept at compile time.
-static_assert(net::UdpSendable<MockUdpSocket>,
-              "MockUdpSocket must satisfy UdpSendable");
-
-// =============================================================================
-// Helper: create a sockaddr_in from IP string and port
-// =============================================================================
-
-sockaddr_in make_addr(const char *ip, std::uint16_t port) {
-  sockaddr_in addr{};
-  addr.sin_family = AF_INET;
-  addr.sin_port = htons(port);
-  inet_pton(AF_INET, ip, &addr.sin_addr);
-  return addr;
-}
+using test::make_test_addr;
+using test::MockUdpSocket;
 
 // Helper: deserialize the n-th sent packet into a MarketDataUpdate.
 bool deserialize_packet(const MockUdpSocket &sock, std::size_t index,
@@ -97,8 +43,8 @@ bool deserialize_packet(const MockUdpSocket &sock, std::size_t index,
 class MarketDataPublisherTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    feed_a_ = make_addr("239.255.0.1", 9000);
-    feed_b_ = make_addr("239.255.0.2", 9001);
+    feed_a_ = make_test_addr("239.255.0.1", 9000);
+    feed_b_ = make_test_addr("239.255.0.2", 9001);
   }
 
   MockUdpSocket sock_;
@@ -328,20 +274,26 @@ TEST_F(MarketDataPublisherTest, PublishUpdateExplicit) {
   EXPECT_GT(md.exchange_ts, 0);
 }
 
-// publish_trade() sends 2 datagrams and adjusts mid_price toward trade price.
-TEST_F(MarketDataPublisherTest, PublishTradeAdjustsMidPrice) {
+// publish_trade() sends 1 datagram with kTrade msg_type.
+TEST_F(MarketDataPublisherTest, PublishTradeSendsTradeType) {
   MarketDataPublisher<MockUdpSocket> pub(sock_, /*symbol_id=*/1, seq_num_,
                                          feed_a_);
 
-  const algo::Price initial_mid = pub.mid_price();
+  pub.publish_trade(algo::Side::kBid, 1'050'000, 100);
 
-  // A trade at a higher price should pull mid_price upward.
-  const algo::Price trade_price = initial_mid + 5000;
-  pub.publish_trade(algo::Side::kBid, trade_price, 100);
+  // 1 Trade datagram (no synthetic opposite-side BBO).
+  ASSERT_EQ(sock_.sent_packets.size(), 1U);
+  EXPECT_EQ(seq_num_, 1U);
 
-  EXPECT_GT(pub.mid_price(), initial_mid);
-  EXPECT_EQ(sock_.sent_packets.size(), 2U);
-  EXPECT_EQ(seq_num_, 2U);
+  // Verify kTrade msg_type on the wire.
+  MarketDataUpdate md{};
+  const auto &pkt = sock_.sent_packets[0].data;
+  ASSERT_TRUE(deserialize_market_data(
+      std::span<const std::byte>(pkt.data(), pkt.size()), md));
+  EXPECT_EQ(md.md_msg_type, MdMsgType::kTrade);
+  EXPECT_EQ(md.side, algo::Side::kBid);
+  EXPECT_EQ(md.price, 1'050'000);
+  EXPECT_EQ(md.qty, 100U);
 }
 
 // Send failure does not crash and seq_num still increments.

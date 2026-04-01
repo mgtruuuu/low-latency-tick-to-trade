@@ -32,7 +32,7 @@ TEST(WireReaderTest, ReadU32BeKnownValue) {
 
   auto val = r.read_u32_be();
   ASSERT_TRUE(val.has_value());
-  EXPECT_EQ(*val, 0x01020304U);  // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(*val, 0x01020304U); // NOLINT(bugprone-unchecked-optional-access)
   EXPECT_EQ(r.consumed(), 4U);
 }
 
@@ -48,7 +48,7 @@ TEST(WireReaderTest, ReadU32LeKnownValue) {
 
   auto val = r.read_u32_le();
   ASSERT_TRUE(val.has_value());
-  EXPECT_EQ(*val, 0x01020304U);  // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(*val, 0x01020304U); // NOLINT(bugprone-unchecked-optional-access)
 }
 
 // ============================================================================
@@ -61,7 +61,7 @@ TEST(WireReaderTest, ReadU16BeKnownValue) {
 
   auto val = r.read_u16_be();
   ASSERT_TRUE(val.has_value());
-  EXPECT_EQ(*val, 0xCAFEU);  // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(*val, 0xCAFEU); // NOLINT(bugprone-unchecked-optional-access)
 }
 
 TEST(WireReaderTest, ReadU64BeKnownValue) {
@@ -72,7 +72,8 @@ TEST(WireReaderTest, ReadU64BeKnownValue) {
 
   auto val = r.read_u64_be();
   ASSERT_TRUE(val.has_value());
-  EXPECT_EQ(*val, 0x0102030405060708ULL);  // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_EQ(*val, 0x0102030405060708ULL);
 }
 
 // ============================================================================
@@ -148,7 +149,8 @@ TEST(WireReaderTest, RoundTripBe) {
   ASSERT_TRUE(w.write_u64_be(0x0123456789ABCDEFULL));
 
   // Read back
-  mk::net::WireReader r{.buf = std::span<const std::byte>{buf}.first(w.written())};
+  mk::net::WireReader r{.buf =
+                            std::span<const std::byte>{buf}.first(w.written())};
   auto v16 = r.read_u16_be();
   auto v32 = r.read_u32_be();
   auto v64 = r.read_u64_be();
@@ -156,9 +158,10 @@ TEST(WireReaderTest, RoundTripBe) {
   ASSERT_TRUE(v16.has_value());
   ASSERT_TRUE(v32.has_value());
   ASSERT_TRUE(v64.has_value());
-  EXPECT_EQ(*v16, 0xCAFEU);                // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(*v32, 0xDEADBEEFU);            // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(*v64, 0x0123456789ABCDEFULL);  // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(*v16, 0xCAFEU);     // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(*v32, 0xDEADBEEFU); // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_EQ(*v64, 0x0123456789ABCDEFULL);
   EXPECT_EQ(r.remaining(), 0U);
 }
 
@@ -170,7 +173,8 @@ TEST(WireReaderTest, RoundTripLe) {
   ASSERT_TRUE(w.write_u32_le(0x12345678U));
   ASSERT_TRUE(w.write_u64_le(0xFEDCBA9876543210ULL));
 
-  mk::net::WireReader r{.buf = std::span<const std::byte>{buf}.first(w.written())};
+  mk::net::WireReader r{.buf =
+                            std::span<const std::byte>{buf}.first(w.written())};
   auto v16 = r.read_u16_le();
   auto v32 = r.read_u32_le();
   auto v64 = r.read_u64_le();
@@ -178,8 +182,9 @@ TEST(WireReaderTest, RoundTripLe) {
   ASSERT_TRUE(v16.has_value());
   ASSERT_TRUE(v32.has_value());
   ASSERT_TRUE(v64.has_value());
-  EXPECT_EQ(*v16, 0xBEEFU);                   // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(*v32, 0x12345678U);               // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_EQ(*v64, 0xFEDCBA9876543210ULL);     // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(*v16, 0xBEEFU);     // NOLINT(bugprone-unchecked-optional-access)
+  EXPECT_EQ(*v32, 0x12345678U); // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_EQ(*v64, 0xFEDCBA9876543210ULL);
   EXPECT_EQ(r.remaining(), 0U);
 }

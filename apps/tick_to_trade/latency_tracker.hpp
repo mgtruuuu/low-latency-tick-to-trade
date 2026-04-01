@@ -202,9 +202,10 @@ private:
   static constexpr std::uint64_t kTscBucketWidth = 128;
 
   // Order RTT is in nanoseconds (from monotonic_nanos), not TSC cycles.
-  // 2048 buckets × 100ns = range [0, 204800ns ≈ 205us).
-  static constexpr std::size_t kRttNumBuckets = 2048;
-  static constexpr std::uint64_t kRttBucketWidth = 100;
+  // 4096 buckets × 1000ns = range [0, 4096000ns ≈ 4ms).
+  // Covers typical two-machine RTT (~400µs–2ms). Resolution: 1µs.
+  static constexpr std::size_t kRttNumBuckets = 4096;
+  static constexpr std::uint64_t kRttBucketWidth = 1000;
 
   // -- Stage breakdown indices ------------------------------------------------
 

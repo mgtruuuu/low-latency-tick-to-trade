@@ -57,6 +57,9 @@ enum class RejectReason : std::uint8_t {
   kInvalidPrice = 3,
   kInvalidQty = 4,
   kOrderNotFound = 5,
+  kInvalidOrderId = 6, ///< client_order_id exceeds 48-bit composite key range.
+  kUnknownSymbol = 7,  ///< symbol_id not registered in the exchange.
+  kThrottled = 8,      ///< Gateway overloaded (request queue full).
 };
 
 // ======================================================================
@@ -69,23 +72,33 @@ enum class RejectReason : std::uint8_t {
 // Padding after side ensures price is 8-byte aligned on the wire for
 // clarity, though WireReader/WireWriter use memcpy (no alignment needed).
 
-struct MarketDataUpdate {
-  std::uint64_t seq_num{0};    // Monotonic sequence for gap detection
-  std::uint32_t symbol_id{0};  // Instrument identifier
-  algo::Side side{};           // Bid or Ask
-  algo::Price price{0};        // Fixed-point tick price
-  algo::Qty qty{0};            // Quantity at this level
-  std::int64_t exchange_ts{0}; // Exchange timestamp (monotonic nanos)
+/// Market data message type (discriminates BBO update vs trade on UDP).
+enum class MdMsgType : std::uint8_t {
+  kBBOUpdate = 0, ///< Best bid or ask price/qty update.
+  kTrade = 1,     ///< Trade execution (price + qty).
 };
 
+struct MarketDataUpdate {
+  std::uint64_t seq_num{0};              // Monotonic sequence for gap detection
+  std::uint32_t symbol_id{0};            // Instrument identifier
+  MdMsgType md_msg_type{MdMsgType::kBBOUpdate}; // BBO or Trade
+  algo::Side side{};                     // Bid or Ask
+  algo::Price price{0};                  // Fixed-point tick price
+  algo::Qty qty{0};                      // Quantity at this level
+  std::int64_t exchange_ts{0};           // Exchange timestamp (monotonic nanos)
+};
+
+// clang-format off
 inline constexpr std::size_t kMarketDataWireSize =
-    sizeof(std::uint64_t) + // seq_num
-    sizeof(std::uint32_t) + // symbol_id
-    sizeof(std::uint8_t) +  // side
-    3 +                     // padding (aligns price on wire)
-    sizeof(std::int64_t) +  // price
-    sizeof(std::uint32_t) + // qty
-    sizeof(std::int64_t);   // exchange_ts
+    sizeof(std::uint64_t) + // seq_num       (8)
+    sizeof(std::uint32_t) + // symbol_id     (4)
+    sizeof(std::uint8_t) +  // md_msg_type   (1)
+    sizeof(std::uint8_t) +  // side          (1)
+    2 +                     // padding       (2) — aligns price to offset 16
+    sizeof(std::int64_t) +  // price         (8)
+    sizeof(std::uint32_t) + // qty           (4)
+    sizeof(std::int64_t);   // exchange_ts   (8)
+// clang-format on
 static_assert(kMarketDataWireSize == 36);
 
 // ======================================================================

@@ -121,7 +121,7 @@ TEST(ArenaTest, MoveConstructorNonOwning) {
   EXPECT_FALSE(b.owns_memory());
 
   // Source is in moved-from state.
-  EXPECT_EQ(0U, a.capacity());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(0U, a.capacity()); // NOLINT(bugprone-use-after-move)
   EXPECT_EQ(0U, a.used());
 }
 
@@ -136,7 +136,7 @@ TEST(ArenaTest, MoveAssignmentNonOwning) {
 
   EXPECT_EQ(512U, b.capacity());
   EXPECT_GE(b.used(), 100U);
-  EXPECT_EQ(0U, a.capacity());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(0U, a.capacity()); // NOLINT(bugprone-use-after-move)
 }
 
 // ============================================================================
@@ -146,9 +146,11 @@ TEST(ArenaTest, MoveAssignmentNonOwning) {
 TEST(ArenaOwningTest, MmapRegionConstructor) {
   auto region = MmapRegion::allocate_anonymous(4096);
   ASSERT_TRUE(region.has_value());
-  const auto region_size = region->size();  // NOLINT(bugprone-unchecked-optional-access)
+  const auto region_size =
+      region->size(); // NOLINT(bugprone-unchecked-optional-access)
 
-  const Arena a(std::move(*region));       // NOLINT(bugprone-unchecked-optional-access)
+  const Arena a(
+      std::move(*region)); // NOLINT(bugprone-unchecked-optional-access)
   EXPECT_TRUE(a.owns_memory());
   // MmapRegion may round up to page boundary, so capacity >= requested.
   EXPECT_GE(a.capacity(), 4096U);
@@ -160,7 +162,7 @@ TEST(ArenaOwningTest, MmapRegionAllocAndReset) {
   auto region = MmapRegion::allocate_anonymous(8192);
   ASSERT_TRUE(region.has_value());
 
-  Arena a(std::move(*region));  // NOLINT(bugprone-unchecked-optional-access)
+  Arena a(std::move(*region)); // NOLINT(bugprone-unchecked-optional-access)
 
   void *p1 = a.alloc(1024, 8);
   ASSERT_NE(nullptr, p1);
@@ -184,7 +186,7 @@ TEST(ArenaOwningTest, MoveConstructorOwning) {
   auto region = MmapRegion::allocate_anonymous(4096);
   ASSERT_TRUE(region.has_value());
 
-  Arena a(std::move(*region));  // NOLINT(bugprone-unchecked-optional-access)
+  Arena a(std::move(*region)); // NOLINT(bugprone-unchecked-optional-access)
   (void)a.alloc(100, 8);
   const auto cap = a.capacity();
 
@@ -194,7 +196,7 @@ TEST(ArenaOwningTest, MoveConstructorOwning) {
   EXPECT_GE(b.used(), 100U);
 
   // Source is in moved-from state.
-  EXPECT_EQ(0U, a.capacity());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(0U, a.capacity()); // NOLINT(bugprone-use-after-move)
   EXPECT_FALSE(a.owns_memory());
 }
 
@@ -204,8 +206,8 @@ TEST(ArenaOwningTest, MoveAssignmentOwning) {
   ASSERT_TRUE(region1.has_value());
   ASSERT_TRUE(region2.has_value());
 
-  Arena a(std::move(*region1));  // NOLINT(bugprone-unchecked-optional-access)
-  Arena b(std::move(*region2));  // NOLINT(bugprone-unchecked-optional-access)
+  Arena a(std::move(*region1)); // NOLINT(bugprone-unchecked-optional-access)
+  Arena b(std::move(*region2)); // NOLINT(bugprone-unchecked-optional-access)
   const auto cap_a = a.capacity();
 
   (void)a.alloc(100, 8);
@@ -214,7 +216,7 @@ TEST(ArenaOwningTest, MoveAssignmentOwning) {
   EXPECT_EQ(cap_a, b.capacity());
   EXPECT_GE(b.used(), 100U);
   EXPECT_TRUE(b.owns_memory());
-  EXPECT_EQ(0U, a.capacity());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(0U, a.capacity()); // NOLINT(bugprone-use-after-move)
 }
 
 TEST(ArenaOwningTest, MoveFromOwningToNonOwning) {
@@ -225,7 +227,8 @@ TEST(ArenaOwningTest, MoveFromOwningToNonOwning) {
 
   auto region = MmapRegion::allocate_anonymous(4096);
   ASSERT_TRUE(region.has_value());
-  Arena owning(std::move(*region));  // NOLINT(bugprone-unchecked-optional-access)
+  Arena owning(
+      std::move(*region)); // NOLINT(bugprone-unchecked-optional-access)
   const auto cap = owning.capacity();
 
   (void)owning.alloc(100, 8);
@@ -233,7 +236,7 @@ TEST(ArenaOwningTest, MoveFromOwningToNonOwning) {
 
   EXPECT_EQ(cap, non_owning.capacity());
   EXPECT_TRUE(non_owning.owns_memory());
-  EXPECT_EQ(0U, owning.capacity());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(0U, owning.capacity()); // NOLINT(bugprone-use-after-move)
 }
 
 // ============================================================================

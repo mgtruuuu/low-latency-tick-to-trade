@@ -47,6 +47,11 @@ public:
   /// @return true if a signal was generated, false otherwise.
   [[nodiscard]] bool on_market_data(const MarketDataUpdate &update,
                                     Signal &out) noexcept {
+    // Skip trade messages — only BBO updates affect strategy state.
+    if (update.md_msg_type != MdMsgType::kBBOUpdate) {
+      return false;
+    }
+
     // Defensive bounds check — each component validates its own inputs.
     if (update.symbol_id == 0 || update.symbol_id > NSymbols) [[unlikely]] {
       return false;

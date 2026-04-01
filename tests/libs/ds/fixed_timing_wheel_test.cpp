@@ -463,10 +463,8 @@ TEST_F(TimingWheelTest, CallbackCancelsMultipleLaterNodesInSameChain) {
     handle_t target_b;
     int fired;
   };
-  MultiCancelCtx ctx{.wheel = &wheel_,
-                     .target_a = a_handle,
-                     .target_b = b_handle,
-                     .fired = 0};
+  MultiCancelCtx ctx{
+      .wheel = &wheel_, .target_a = a_handle, .target_b = b_handle, .fired = 0};
 
   const static auto cancel_multi_cb = [](void *raw) noexcept {
     auto *c = static_cast<MultiCancelCtx *>(raw);

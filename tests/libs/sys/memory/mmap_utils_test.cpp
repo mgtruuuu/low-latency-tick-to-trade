@@ -45,8 +45,10 @@ namespace {
 TEST(MmapUtilsTest, TryAllocate_ReturnsValidRegion) {
   auto region = try_allocate_with_hugepage_fallback({.size = 4096});
   ASSERT_TRUE(region.has_value());
-  EXPECT_NE(region->get(), nullptr);   // NOLINT(bugprone-unchecked-optional-access)
-  EXPECT_GE(region->size(), 4096U);    // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_NE(region->get(), nullptr);
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_GE(region->size(), 4096U);
 }
 
 TEST(MmapUtilsTest, TryAllocate_ZeroSizeReturnsNullopt) {
@@ -60,7 +62,8 @@ TEST(MmapUtilsTest, TryAllocate_RegionIsWritable) {
   ASSERT_TRUE(region.has_value());
 
   // Write pattern and read back — verifies pages are faulted and writable.
-  auto *p = static_cast<char *>(region->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *p = static_cast<char *>(
+      region->get()); // NOLINT(bugprone-unchecked-optional-access)
   std::memset(p, 0xAB, 4096);
   EXPECT_EQ(p[0], static_cast<char>(0xAB));
   EXPECT_EQ(p[4095], static_cast<char>(0xAB));
@@ -70,14 +73,16 @@ TEST(MmapUtilsTest, TryAllocate_LargeAllocation) {
   constexpr std::size_t kSize = 2UL * 1024 * 1024; // 2MB
   auto region = try_allocate_with_hugepage_fallback({.size = kSize});
   ASSERT_TRUE(region.has_value());
-  EXPECT_GE(region->size(), kSize);  // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_GE(region->size(), kSize);
 }
 
 TEST(MmapUtilsTest, TryAllocate_ThpOnlyReturnsValidRegion) {
   auto region = try_allocate_with_hugepage_fallback(
       {.size = 4096, .page_mapping_mode = PageMappingMode::kThpOnly});
   ASSERT_TRUE(region.has_value());
-  EXPECT_NE(region->get(), nullptr);  // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_NE(region->get(), nullptr);
 }
 
 TEST(MmapUtilsTest, TryAllocate_ThpOnlyIsWritable) {
@@ -87,7 +92,8 @@ TEST(MmapUtilsTest, TryAllocate_ThpOnlyIsWritable) {
        .page_mapping_mode = PageMappingMode::kThpOnly});
   ASSERT_TRUE(region.has_value());
 
-  auto *p = static_cast<char *>(region->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *p = static_cast<char *>(
+      region->get()); // NOLINT(bugprone-unchecked-optional-access)
   std::memset(p, 0xCD, 4096);
   EXPECT_EQ(p[0], static_cast<char>(0xCD));
 }
@@ -100,8 +106,10 @@ TEST(MmapUtilsTest, TryAllocate_ExplicitOnlyMaySucceedOrFail) {
       {.size = 2UL * 1024 * 1024,
        .page_mapping_mode = PageMappingMode::kExplicitOnly});
   if (region.has_value()) {
-    EXPECT_NE(region->get(), nullptr);  // NOLINT(bugprone-unchecked-optional-access)
-    EXPECT_GE(region->size(), 2UL * 1024 * 1024);  // NOLINT(bugprone-unchecked-optional-access)
+    EXPECT_NE(region->get(),
+              nullptr); // NOLINT(bugprone-unchecked-optional-access)
+    EXPECT_GE(region->size(),
+              2UL * 1024 * 1024); // NOLINT(bugprone-unchecked-optional-access)
   }
   // nullopt is also acceptable — machine may not have explicit huge pages.
 }
@@ -112,7 +120,8 @@ TEST(MmapUtilsTest, TryAllocate_NoPrefaultRegionIsStillAccessible) {
   ASSERT_TRUE(region.has_value());
 
   // Pages are not prefaulted but still accessible (demand-faulted on write).
-  auto *p = static_cast<char *>(region->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *p = static_cast<char *>(
+      region->get()); // NOLINT(bugprone-unchecked-optional-access)
   p[0] = 42;
   EXPECT_EQ(p[0], 42);
 }
@@ -128,7 +137,8 @@ TEST(MmapUtilsTest, TryAllocate_FailFastValidSizeSucceeds) {
   auto region = try_allocate_with_hugepage_fallback(
       {.size = 4096, .failure_mode = FailureMode::kFailFast});
   ASSERT_TRUE(region.has_value());
-  EXPECT_NE(region->get(), nullptr);  // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_NE(region->get(), nullptr);
 }
 
 TEST(MmapUtilsTest, TryAllocate_ManualWritePrefault) {
@@ -136,7 +146,8 @@ TEST(MmapUtilsTest, TryAllocate_ManualWritePrefault) {
       {.size = 4096, .pf = PrefaultPolicy::kManualWrite});
   ASSERT_TRUE(region.has_value());
 
-  auto *p = static_cast<char *>(region->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *p = static_cast<char *>(
+      region->get()); // NOLINT(bugprone-unchecked-optional-access)
   std::memset(p, 0xEF, 4096);
   EXPECT_EQ(p[0], static_cast<char>(0xEF));
 }
@@ -147,7 +158,8 @@ TEST(MmapUtilsTest, TryAllocate_ManualReadPrefault) {
   ASSERT_TRUE(region.has_value());
 
   // Read-prefaulted pages may be zero-page mapped; writing forces real page.
-  auto *p = static_cast<char *>(region->get());  // NOLINT(bugprone-unchecked-optional-access)
+  auto *p = static_cast<char *>(
+      region->get()); // NOLINT(bugprone-unchecked-optional-access)
   EXPECT_EQ(p[0], 0);
 }
 
@@ -164,8 +176,7 @@ TEST(MmapUtilsTest, Allocate_ReturnsValidRegion) {
 using MmapUtilsDeathTest = ::testing::Test;
 
 TEST_F(MmapUtilsDeathTest, Allocate_ZeroSizeAborts) {
-  EXPECT_DEATH(
-      { (void)allocate_with_hugepage_fallback({.size = 0}); }, "");
+  EXPECT_DEATH({ (void)allocate_with_hugepage_fallback({.size = 0}); }, "");
 }
 
 // ============================================================================
@@ -204,19 +215,22 @@ TEST(MmapUtilsTest, RegionIntentConfigDefaultValues) {
 TEST(MmapUtilsTest, TryAllocateRegion_HotRwReturnsValidRegion) {
   auto region = try_allocate_region({.size = 4096}, RegionIntent::kHotRw);
   ASSERT_TRUE(region.has_value());
-  EXPECT_NE(region->get(), nullptr); // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_NE(region->get(), nullptr);
 }
 
 TEST(MmapUtilsTest, TryAllocateRegion_ReadMostlyReturnsValidRegion) {
   auto region = try_allocate_region({.size = 4096}, RegionIntent::kReadMostly);
   ASSERT_TRUE(region.has_value());
-  EXPECT_NE(region->get(), nullptr); // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_NE(region->get(), nullptr);
 }
 
 TEST(MmapUtilsTest, TryAllocateRegion_ColdReturnsValidRegion) {
   auto region = try_allocate_region({.size = 4096}, RegionIntent::kCold);
   ASSERT_TRUE(region.has_value());
-  EXPECT_NE(region->get(), nullptr); // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_NE(region->get(), nullptr);
 }
 
 TEST(MmapUtilsTest, TryAllocateRegion_ZeroSizeReturnsNullopt) {
@@ -258,7 +272,8 @@ TEST_F(MmapUtilsDeathTest, AllocateRegion_ZeroSizeAborts) {
 TEST(MmapUtilsTest, TryAllocateHotRwRegion_ReturnsValidRegion) {
   auto region = try_allocate_hot_rw_region({.size = 4096});
   ASSERT_TRUE(region.has_value());
-  EXPECT_NE(region->get(), nullptr); // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_NE(region->get(), nullptr);
 }
 
 TEST(MmapUtilsTest, TryAllocateHotRwRegion_ZeroSizeReturnsNullopt) {
@@ -269,7 +284,8 @@ TEST(MmapUtilsTest, TryAllocateHotRwRegion_ZeroSizeReturnsNullopt) {
 TEST(MmapUtilsTest, TryAllocateReadMostlyRegion_ReturnsValidRegion) {
   auto region = try_allocate_read_mostly_region({.size = 4096});
   ASSERT_TRUE(region.has_value());
-  EXPECT_NE(region->get(), nullptr); // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_NE(region->get(), nullptr);
 }
 
 TEST(MmapUtilsTest, TryAllocateReadMostlyRegion_ZeroSizeReturnsNullopt) {
@@ -280,7 +296,8 @@ TEST(MmapUtilsTest, TryAllocateReadMostlyRegion_ZeroSizeReturnsNullopt) {
 TEST(MmapUtilsTest, TryAllocateColdRegion_ReturnsValidRegion) {
   auto region = try_allocate_cold_region({.size = 4096});
   ASSERT_TRUE(region.has_value());
-  EXPECT_NE(region->get(), nullptr); // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_NE(region->get(), nullptr);
 }
 
 TEST(MmapUtilsTest, TryAllocateColdRegion_ZeroSizeReturnsNullopt) {
@@ -365,7 +382,8 @@ TEST(MmapUtilsTest, TryAllocateRegion_ThpOnlyModeWorks) {
       {.size = 4096, .page_mapping_mode = PageMappingMode::kThpOnly},
       RegionIntent::kHotRw);
   ASSERT_TRUE(region.has_value());
-  EXPECT_NE(region->get(), nullptr); // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_NE(region->get(), nullptr);
 }
 
 TEST(MmapUtilsTest, TryAllocateRegion_RegularPagesModeWorks) {
@@ -373,10 +391,12 @@ TEST(MmapUtilsTest, TryAllocateRegion_RegularPagesModeWorks) {
       {.size = 4096, .page_mapping_mode = PageMappingMode::kRegularPages},
       RegionIntent::kHotRw);
   ASSERT_TRUE(region.has_value());
-  EXPECT_NE(region->get(), nullptr); // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_NE(region->get(), nullptr);
 
   // Writable (kHotRw prefaults even on regular pages).
-  auto *p = static_cast<char *>(region->get()); // NOLINT(bugprone-unchecked-optional-access)
+  auto *p = static_cast<char *>(
+      region->get()); // NOLINT(bugprone-unchecked-optional-access)
   std::memset(p, 0xBB, 4096);
   EXPECT_EQ(p[0], static_cast<char>(0xBB));
 }
@@ -386,32 +406,37 @@ TEST(MmapUtilsTest, TryAllocate_RegularPagesModeWorks) {
   auto region = try_allocate_with_hugepage_fallback(
       {.size = 4096, .page_mapping_mode = PageMappingMode::kRegularPages});
   ASSERT_TRUE(region.has_value());
-  EXPECT_NE(region->get(), nullptr); // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_NE(region->get(), nullptr);
 }
 
 TEST(MmapUtilsTest, ColdIntent_UsesRegularPages) {
-  // kCold intent should use regular pages regardless of config's page_mapping_mode.
-  // This verifies the intent overrides the configured page_mapping_mode.
+  // kCold intent should use regular pages regardless of config's
+  // page_mapping_mode. This verifies the intent overrides the configured
+  // page_mapping_mode.
   auto region = try_allocate_region(
       {.size = 4096, .page_mapping_mode = PageMappingMode::kExplicitThenThp},
       RegionIntent::kCold);
   ASSERT_TRUE(region.has_value());
-  EXPECT_NE(region->get(), nullptr); // NOLINT(bugprone-unchecked-optional-access)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_NE(region->get(), nullptr);
 
   // Still accessible (demand-faulted).
-  auto *p = static_cast<char *>(region->get()); // NOLINT(bugprone-unchecked-optional-access)
+  auto *p = static_cast<char *>(
+      region->get()); // NOLINT(bugprone-unchecked-optional-access)
   p[0] = 42;
   EXPECT_EQ(p[0], 42);
 }
 
 TEST(MmapUtilsTest, TryAllocateRegion_ExplicitOnlyMaySucceedOrFail) {
   // Machine-dependent: depends on nr_hugepages reservation.
-  auto region = try_allocate_region(
-      {.size = 2UL * 1024 * 1024,
-       .page_mapping_mode = PageMappingMode::kExplicitOnly},
-      RegionIntent::kHotRw);
+  auto region =
+      try_allocate_region({.size = 2UL * 1024 * 1024,
+                           .page_mapping_mode = PageMappingMode::kExplicitOnly},
+                          RegionIntent::kHotRw);
   if (region.has_value()) {
-    EXPECT_NE(region->get(), nullptr); // NOLINT(bugprone-unchecked-optional-access)
+    EXPECT_NE(region->get(),
+              nullptr); // NOLINT(bugprone-unchecked-optional-access)
   }
 }
 

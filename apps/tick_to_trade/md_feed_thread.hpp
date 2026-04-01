@@ -25,8 +25,8 @@
 
 #include "net/epoll_wrapper.hpp"
 
-#include "sys/log/async_logger.hpp"
-#include "sys/log/log_macros.hpp"
+#include "pipeline_log_push.hpp"
+
 #include "sys/log/signal_logger.hpp"
 #include "sys/nano_clock.hpp"
 #include "sys/thread/affinity.hpp"
@@ -51,7 +51,7 @@ public:
     LatencyTracker &tracker;
     MdCtx &md_ctx;
     MdToStrategyQueue &md_queue;
-    sys::log::LogQueue &log_queue;
+    PipelineLogQueue &log_queue;
     std::atomic_flag &stop_flag;
     std::int32_t pin_core_md;
     std::uint32_t max_symbols;
@@ -152,9 +152,9 @@ private:
 #ifdef PROFILE_STAGES
             auto t1 = sys::rdtsc();
             tracker_.record_feed_parse(t1 - t0);
-            (void)sys::log::log_latency(
-                log_queue_, sys::log::kThreadIdMd,
-                sys::log::LatencyStage::kFeedParse, t1 - t0, t0);
+            (void)log_latency(
+                log_queue_, kThreadIdMd,
+                LatencyStage::kFeedParse, t1 - t0, t0);
 #else
             (void)tracker_;
 #endif
@@ -179,8 +179,8 @@ private:
             }
 
             // Log market data to async logger (binary push, ~5-10ns).
-            (void)sys::log::log_market_data(
-                log_queue_, sys::log::kThreadIdMd, sys::log::LogLevel::kInfo,
+            (void)log_market_data(
+                log_queue_, kThreadIdMd, LogLevel::kInfo,
                 update.seq_num, update.symbol_id,
                 static_cast<std::uint8_t>(update.side), update.price,
                 update.qty);
@@ -199,7 +199,7 @@ private:
   LatencyTracker &tracker_;
   MdCtx &md_ctx_;
   MdToStrategyQueue &md_queue_;
-  sys::log::LogQueue &log_queue_;
+  PipelineLogQueue &log_queue_;
   std::atomic_flag &stop_flag_;
 
   // -- Configuration (value-copied at construction) --

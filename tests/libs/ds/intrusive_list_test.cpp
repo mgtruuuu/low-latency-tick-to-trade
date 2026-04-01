@@ -112,7 +112,7 @@ TEST(IntrusiveListTest, PopFront) {
   list.push_back(n2);
   list.push_back(n3); // [10, 20, 30]
 
-  TestNode  const&popped = list.pop_front();
+  TestNode const &popped = list.pop_front();
   EXPECT_EQ(popped.value, 10);
   EXPECT_EQ(&popped, &n1);
   EXPECT_FALSE(n1.is_linked());
@@ -136,7 +136,7 @@ TEST(IntrusiveListTest, PopBack) {
   list.push_back(n2);
   list.push_back(n3); // [10, 20, 30]
 
-  TestNode  const&popped = list.pop_back();
+  TestNode const &popped = list.pop_back();
   EXPECT_EQ(popped.value, 30);
   EXPECT_EQ(&popped, &n3);
   EXPECT_FALSE(n3.is_linked());
@@ -516,5 +516,164 @@ TEST(IntrusiveListDeathTest, EraseUnlinkedNodeAborts) {
 }
 
 #endif // NDEBUG
+
+// =============================================================================
+// Move semantics
+// =============================================================================
+
+TEST(IntrusiveListTest, MoveConstructEmpty) {
+  IntrusiveList<TestNode> a;
+  const IntrusiveList<TestNode> b(std::move(a));
+
+  EXPECT_TRUE(b.empty());
+  EXPECT_EQ(b.size(), 0U);
+  EXPECT_TRUE(a.empty()); // NOLINT(bugprone-use-after-move)
+}
+
+TEST(IntrusiveListTest, MoveConstructNonEmpty) {
+  IntrusiveList<TestNode> a;
+  TestNode n1(10);
+  TestNode n2(20);
+  TestNode n3(30);
+  a.push_back(n1);
+  a.push_back(n2);
+  a.push_back(n3);
+
+  IntrusiveList<TestNode> b(std::move(a));
+
+  // b has all 3 nodes.
+  EXPECT_EQ(b.size(), 3U);
+  EXPECT_EQ(b.front().value, 10);
+  EXPECT_EQ(b.back().value, 30);
+
+  // a is empty.
+  EXPECT_TRUE(a.empty()); // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(a.size(), 0U);
+
+  // Iteration works (sentinel links are correct).
+  std::vector<int> values;
+  for (const auto &node : b) {
+    values.push_back(node.value);
+  }
+  EXPECT_EQ(values, (std::vector<int>{10, 20, 30}));
+}
+
+TEST(IntrusiveListTest, MoveAssignNonEmptyToEmpty) {
+  IntrusiveList<TestNode> a;
+  TestNode n1(1);
+  TestNode n2(2);
+  a.push_back(n1);
+  a.push_back(n2);
+
+  IntrusiveList<TestNode> b;
+  b = std::move(a);
+
+  EXPECT_EQ(b.size(), 2U);
+  EXPECT_EQ(b.front().value, 1);
+  EXPECT_EQ(b.back().value, 2);
+  EXPECT_TRUE(a.empty()); // NOLINT(bugprone-use-after-move)
+}
+
+TEST(IntrusiveListTest, MoveAssignNonEmptyToNonEmpty) {
+  IntrusiveList<TestNode> a;
+  TestNode a1(10);
+  TestNode a2(20);
+  a.push_back(a1);
+  a.push_back(a2);
+
+  IntrusiveList<TestNode> b;
+  TestNode b1(99);
+  b.push_back(b1);
+
+  b = std::move(a);
+
+  // b now has a's nodes.
+  EXPECT_EQ(b.size(), 2U);
+  EXPECT_EQ(b.front().value, 10);
+
+  // a is empty.
+  EXPECT_TRUE(a.empty()); // NOLINT(bugprone-use-after-move)
+
+  // b1 was unlinked by clear() in move assignment.
+  EXPECT_FALSE(b1.is_linked());
+}
+
+TEST(IntrusiveListTest, MoveConstructThenModify) {
+  // Nodes must outlive the list — declare nodes before lists so they are
+  // destroyed after lists (C++ destroys locals in reverse declaration order).
+  TestNode n1(1);
+  TestNode n2(2);
+  TestNode n3(3);
+  IntrusiveList<TestNode> a;
+  a.push_back(n1);
+  a.push_back(n2);
+
+  IntrusiveList<TestNode> b(std::move(a));
+
+  // Modify b — push/pop/erase must work after move.
+  b.push_back(n3);
+  EXPECT_EQ(b.size(), 3U);
+  EXPECT_EQ(b.back().value, 3);
+
+  b.erase(n2);
+  EXPECT_EQ(b.size(), 2U);
+
+  auto &popped = b.pop_front();
+  EXPECT_EQ(popped.value, 1);
+  EXPECT_EQ(b.size(), 1U);
+  EXPECT_EQ(b.front().value, 3);
+}
+
+// =============================================================================
+// Swap
+// =============================================================================
+
+TEST(IntrusiveListTest, SwapBothNonEmpty) {
+  // Nodes must outlive lists — declare nodes first.
+  TestNode a1(10);
+  TestNode a2(20);
+  TestNode b1(77);
+  IntrusiveList<TestNode> a;
+  a.push_back(a1);
+  a.push_back(a2);
+
+  IntrusiveList<TestNode> b;
+  b.push_back(b1);
+
+  a.swap(b);
+
+  // a now has b's node.
+  EXPECT_EQ(a.size(), 1U);
+  EXPECT_EQ(a.front().value, 77);
+
+  // b now has a's nodes.
+  EXPECT_EQ(b.size(), 2U);
+  EXPECT_EQ(b.front().value, 10);
+  EXPECT_EQ(b.back().value, 20);
+}
+
+TEST(IntrusiveListTest, SwapOneEmptyOneNonEmpty) {
+  TestNode n1(42);
+  IntrusiveList<TestNode> a;
+  a.push_back(n1);
+
+  IntrusiveList<TestNode> b; // empty
+
+  swap(a, b); // ADL friend swap
+
+  EXPECT_TRUE(a.empty());
+  EXPECT_EQ(b.size(), 1U);
+  EXPECT_EQ(b.front().value, 42);
+}
+
+TEST(IntrusiveListTest, SwapBothEmpty) {
+  IntrusiveList<TestNode> a;
+  IntrusiveList<TestNode> b;
+
+  a.swap(b);
+
+  EXPECT_TRUE(a.empty());
+  EXPECT_TRUE(b.empty());
+}
 
 } // namespace

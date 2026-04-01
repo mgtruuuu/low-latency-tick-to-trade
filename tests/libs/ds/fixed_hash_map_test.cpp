@@ -4,22 +4,27 @@
  * hash map.
  *
  * Test plan:
- *   1.  FindOnEmptyReturnsNull
- *   2.  InsertAndFind
- *   3.  InsertDuplicateReturnsFalse
- *   4.  UpsertOverwrites (size unchanged)
- *   5.  EraseAndFind
- *   6.  EraseNonexistentReturnsFalse
- *   7.  CollisionHandling (ConstantHash forcing all keys to bucket 0)
- *   8.  TombstoneProbeChain (erase middle of chain, find past it)
- *   9.  LoadFactorRejection (fill to 70%, verify insert fails but upsert of
- * existing succeeds)
- *   10. ClearResetsEverything
- *   11. NeedsRebuild (exceed 20% tombstones)
- *   12. CustomHasherAndKeyEqual (composite OrderId key with hash_combine_u64)
- *   13. TombstoneReuseOnInsert (tombstone_count decreases)
- *   14. ConstFind (const correctness)
- *   15. ManyInsertsThenLookups (500+ keys in 1024-cap map)
+ *   FindOnEmptyReturnsNull
+ *   InsertAndFind
+ *   InsertDuplicateReturnsFalse
+ *   UpsertOverwrites (size unchanged)
+ *   EraseAndFind
+ *   EraseNonexistentReturnsFalse
+ *   CollisionHandling (ConstantHash forcing all keys to bucket 0)
+ *   TombstoneProbeChain (erase middle of chain, find past it)
+ *   LoadFactorRejection (fill to 70%, verify insert fails but upsert of
+ *     existing succeeds)
+ *   ClearResetsEverything
+ *   NeedsRebuild (exceed 20% tombstones)
+ *   RebuildEliminatesTombstones
+ *   CustomHasherAndKeyEqual (composite OrderId key with hash_combine_u64)
+ *   TombstoneReuseOnInsert (tombstone_count decreases)
+ *   ConstFind (const correctness)
+ *   ManyInsertsThenLookups (500+ keys in 1024-cap map)
+ *   ForEachVisitsAllEntries
+ *   ForEachSkipsTombstones
+ *   ForEachOnEmpty
+ *   ConstForEach
  */
 
 #include "ds/fixed_hash_map.hpp"
@@ -40,7 +45,7 @@ protected:
 };
 
 // =============================================================================
-// 1. FindOnEmptyReturnsNull
+// FindOnEmptyReturnsNull
 // =============================================================================
 
 TEST_F(FixedHashMapTest, FindOnEmptyReturnsNull) {
@@ -50,7 +55,7 @@ TEST_F(FixedHashMapTest, FindOnEmptyReturnsNull) {
 }
 
 // =============================================================================
-// 2. InsertAndFind
+// InsertAndFind
 // =============================================================================
 
 TEST_F(FixedHashMapTest, InsertAndFind) {
@@ -64,7 +69,7 @@ TEST_F(FixedHashMapTest, InsertAndFind) {
 }
 
 // =============================================================================
-// 3. InsertDuplicateReturnsFalse
+// InsertDuplicateReturnsFalse
 // =============================================================================
 
 TEST_F(FixedHashMapTest, InsertDuplicateReturnsFalse) {
@@ -79,7 +84,7 @@ TEST_F(FixedHashMapTest, InsertDuplicateReturnsFalse) {
 }
 
 // =============================================================================
-// 4. UpsertOverwrites (size unchanged)
+// UpsertOverwrites (size unchanged)
 // =============================================================================
 
 TEST_F(FixedHashMapTest, UpsertOverwrites) {
@@ -99,7 +104,7 @@ TEST_F(FixedHashMapTest, UpsertOverwrites) {
 }
 
 // =============================================================================
-// 5. EraseAndFind
+// EraseAndFind
 // =============================================================================
 
 TEST_F(FixedHashMapTest, EraseAndFind) {
@@ -110,7 +115,7 @@ TEST_F(FixedHashMapTest, EraseAndFind) {
 }
 
 // =============================================================================
-// 6. EraseNonexistentReturnsFalse
+// EraseNonexistentReturnsFalse
 // =============================================================================
 
 TEST_F(FixedHashMapTest, EraseNonexistentReturnsFalse) {
@@ -119,7 +124,7 @@ TEST_F(FixedHashMapTest, EraseNonexistentReturnsFalse) {
 }
 
 // =============================================================================
-// 7. CollisionHandling (ConstantHash forcing all keys to bucket 0)
+// CollisionHandling (ConstantHash forcing all keys to bucket 0)
 // =============================================================================
 
 namespace {
@@ -127,7 +132,8 @@ namespace {
 // A degenerate hash that maps every key to the same bucket.
 // Forces maximum-length linear probe chains for collision testing.
 struct ConstantHash {
-  [[nodiscard]] std::size_t operator()(std::uint64_t /*unused*/) const noexcept {
+  [[nodiscard]] std::size_t
+  operator()(std::uint64_t /*unused*/) const noexcept {
     return 0;
   }
 };
@@ -155,7 +161,7 @@ TEST(FixedHashMapCollision, AllKeysCollide) {
 }
 
 // =============================================================================
-// 8. TombstoneProbeChain (erase middle of chain, find past it)
+// TombstoneProbeChain (erase middle of chain, find past it)
 // =============================================================================
 
 TEST(FixedHashMapCollision, TombstoneProbeChain) {
@@ -188,7 +194,7 @@ TEST(FixedHashMapCollision, TombstoneProbeChain) {
 }
 
 // =============================================================================
-// 9. LoadFactorRejection
+// LoadFactorRejection
 // =============================================================================
 
 TEST_F(FixedHashMapTest, LoadFactorRejection) {
@@ -219,7 +225,7 @@ TEST_F(FixedHashMapTest, LoadFactorRejection) {
 }
 
 // =============================================================================
-// 10. ClearResetsEverything
+// ClearResetsEverything
 // =============================================================================
 
 TEST_F(FixedHashMapTest, ClearResetsEverything) {
@@ -246,7 +252,7 @@ TEST_F(FixedHashMapTest, ClearResetsEverything) {
 }
 
 // =============================================================================
-// 11. NeedsRebuild (exceed 20% tombstones)
+// NeedsRebuild (exceed 20% tombstones)
 // =============================================================================
 
 TEST_F(FixedHashMapTest, NeedsRebuild) {
@@ -268,7 +274,50 @@ TEST_F(FixedHashMapTest, NeedsRebuild) {
 }
 
 // =============================================================================
-// 12. CustomHasherAndKeyEqual (composite OrderId key)
+// RebuildEliminatesTombstones
+// =============================================================================
+// Demonstrates the rebuild pattern: create a new map, re-insert live entries
+// via for_each, verify tombstones are gone and all data is preserved.
+
+TEST_F(FixedHashMapTest, RebuildEliminatesTombstones) {
+  // Insert 8 keys, erase 5 → 5 tombstones, 3 live.
+  for (std::uint64_t i = 0; i < 8; ++i) {
+    ASSERT_TRUE(map_.insert(i, i * 10));
+  }
+  for (std::uint64_t i = 0; i < 5; ++i) {
+    ASSERT_TRUE(map_.erase(i));
+  }
+
+  EXPECT_EQ(3U, map_.size());
+  EXPECT_EQ(5U, map_.tombstone_count());
+  EXPECT_TRUE(map_.needs_rebuild());
+
+  // Rebuild: new map + for_each re-insert.
+  mk::ds::FixedHashMap<std::uint64_t, std::uint64_t, 16> rebuilt;
+  map_.for_each([&](const std::uint64_t &k, const std::uint64_t &v) {
+    ASSERT_TRUE(rebuilt.insert(k, v));
+  });
+
+  // Rebuilt map: same live data, zero tombstones.
+  EXPECT_EQ(3U, rebuilt.size());
+  EXPECT_EQ(0U, rebuilt.tombstone_count());
+  EXPECT_FALSE(rebuilt.needs_rebuild());
+
+  // Verify all live keys survived.
+  for (std::uint64_t i = 5; i < 8; ++i) {
+    const auto *val = rebuilt.find(i);
+    ASSERT_NE(nullptr, val);
+    EXPECT_EQ(i * 10, *val);
+  }
+
+  // Verify erased keys are gone.
+  for (std::uint64_t i = 0; i < 5; ++i) {
+    EXPECT_EQ(nullptr, rebuilt.find(i));
+  }
+}
+
+// =============================================================================
+// CustomHasherAndKeyEqual (composite OrderId key)
 // =============================================================================
 
 namespace {
@@ -299,7 +348,8 @@ TEST(FixedHashMapCustomKey, CompositeOrderIdKey) {
 
   const OrderId id1{.symbol_id = 1, .seq_num = 1000};
   const OrderId id2{.symbol_id = 1, .seq_num = 1001};
-  const OrderId id3{.symbol_id = 2, .seq_num = 1000}; // Same seq_num as id1, different symbol.
+  const OrderId id3{.symbol_id = 2,
+                    .seq_num = 1000}; // Same seq_num as id1, different symbol.
 
   ASSERT_TRUE(map.insert(id1, 99.50));
   ASSERT_TRUE(map.insert(id2, 100.25));
@@ -325,7 +375,7 @@ TEST(FixedHashMapCustomKey, CompositeOrderIdKey) {
 }
 
 // =============================================================================
-// 13. TombstoneReuseOnInsert (tombstone_count decreases)
+// TombstoneReuseOnInsert (tombstone_count decreases)
 // =============================================================================
 
 TEST(FixedHashMapCollision, TombstoneReuseOnInsert) {
@@ -365,7 +415,7 @@ TEST(FixedHashMapCollision, TombstoneReuseOnInsert) {
 }
 
 // =============================================================================
-// 14. ConstFind (const correctness)
+// ConstFind (const correctness)
 // =============================================================================
 
 TEST_F(FixedHashMapTest, ConstFind) {
@@ -382,7 +432,7 @@ TEST_F(FixedHashMapTest, ConstFind) {
 }
 
 // =============================================================================
-// 15. ManyInsertsThenLookups (500+ keys in 1024-cap map)
+// ManyInsertsThenLookups (500+ keys in 1024-cap map)
 // =============================================================================
 
 TEST(FixedHashMapLarge, ManyInsertsThenLookups) {
@@ -409,7 +459,7 @@ TEST(FixedHashMapLarge, ManyInsertsThenLookups) {
 }
 
 // =============================================================================
-// 16. ForEachVisitsAllEntries
+// ForEachVisitsAllEntries
 // =============================================================================
 
 TEST(FixedHashMap, ForEachVisitsAllEntries) {
@@ -436,7 +486,7 @@ TEST(FixedHashMap, ForEachVisitsAllEntries) {
 }
 
 // =============================================================================
-// 17. ForEachSkipsTombstones
+// ForEachSkipsTombstones
 // =============================================================================
 
 TEST(FixedHashMap, ForEachSkipsTombstones) {
@@ -462,7 +512,7 @@ TEST(FixedHashMap, ForEachSkipsTombstones) {
 }
 
 // =============================================================================
-// 18. ForEachOnEmpty
+// ForEachOnEmpty
 // =============================================================================
 
 TEST(FixedHashMap, ForEachOnEmpty) {
@@ -476,7 +526,7 @@ TEST(FixedHashMap, ForEachOnEmpty) {
 }
 
 // =============================================================================
-// 19. ConstForEach
+// ConstForEach
 // =============================================================================
 
 TEST(FixedHashMap, ConstForEach) {

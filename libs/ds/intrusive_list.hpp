@@ -17,9 +17,9 @@
  *   - Circular doubly-linked list with sentinel node. The sentinel eliminates
  *     all nullptr checks in insert/erase — prev and next are always valid.
  *   - Bidirectional iterator via static_cast<T&> downcast from hook pointer.
- *   - Non-copyable, non-movable: the sentinel's address is embedded in every
- *     node's prev/next chain, so moving the list object would invalidate all
- *     links.
+ *   - Non-copyable. Movable via O(1) sentinel fixup (the first and last
+ *     nodes' pointers are patched to the new sentinel address). Moves are
+ *     safe at startup but should not be done during hot-path use.
  *
  * Usage:
  *   struct Order : mk::ds::IntrusiveListHook {
@@ -45,6 +45,7 @@
 #include <cstddef>
 #include <iterator>
 #include <type_traits>
+#include <utility> // std::swap
 
 namespace mk::ds {
 
@@ -83,6 +84,15 @@ template <class T> class IntrusiveList {
   static_assert(std::is_base_of_v<IntrusiveListHook, T>,
                 "T must inherit from IntrusiveListHook");
 
+  // ---------------------------------------------------------------------------
+  // Data members
+  // ---------------------------------------------------------------------------
+
+  // Sentinel node: always present, forms the circular link anchor.
+  // In an empty list, sentinel_.next == sentinel_.prev == &sentinel_.
+  IntrusiveListHook sentinel_;
+  std::size_t size_{0};
+
 public:
   // Forward-declare iterator; definition below.
   template <bool IsConst> class IteratorImpl;
@@ -99,11 +109,49 @@ public:
     clear();
   }
 
-  // Non-copyable, non-movable: sentinel address is embedded in node links.
+  // Non-copyable: copying a linked list would require deep-cloning every
+  // node, which intrusive lists cannot do (nodes are externally owned).
   IntrusiveList(const IntrusiveList &) = delete;
   IntrusiveList &operator=(const IntrusiveList &) = delete;
-  IntrusiveList(IntrusiveList &&) = delete;
-  IntrusiveList &operator=(IntrusiveList &&) = delete;
+
+  // Movable: O(1) sentinel fixup. After move, source is empty.
+  // Safe only before concurrent use — same constraint as HashMap/SPSCQueue.
+  //
+  // Sentinel fixup: linked nodes point to the sentinel via prev/next.
+  // After moving sentinel_ to a new address, the first and last nodes
+  // still point to the OLD sentinel. Fix by updating those two pointers.
+  IntrusiveList(IntrusiveList &&other) noexcept : size_(other.size_) {
+    if (other.size_ == 0) {
+      init_sentinel();
+    } else {
+      sentinel_.prev = other.sentinel_.prev;
+      sentinel_.next = other.sentinel_.next;
+      sentinel_.next->prev = &sentinel_; // first node → new sentinel
+      sentinel_.prev->next = &sentinel_; // last node → new sentinel
+      other.init_sentinel();
+      other.size_ = 0;
+    }
+  }
+
+  IntrusiveList &operator=(IntrusiveList &&other) noexcept {
+    if (this != &other) {
+      IntrusiveList tmp(std::move(other));
+      swap(tmp); // tmp destructor clears our old nodes
+    }
+    return *this;
+  }
+
+  void swap(IntrusiveList &other) noexcept {
+    // Swap sentinel links and sizes.
+    std::swap(sentinel_.prev, other.sentinel_.prev);
+    std::swap(sentinel_.next, other.sentinel_.next);
+    std::swap(size_, other.size_);
+    // After swap, edge nodes still point to the old sentinel. Fix them.
+    fix_sentinel_links();
+    other.fix_sentinel_links();
+  }
+
+  friend void swap(IntrusiveList &a, IntrusiveList &b) noexcept { a.swap(b); }
 
   // ---------------------------------------------------------------------------
   // Capacity
@@ -325,15 +373,21 @@ public:
   };
 
 private:
-  // Sentinel node: always present, forms the circular link anchor.
-  // In an empty list, sentinel_.next == sentinel_.prev == &sentinel_.
-  IntrusiveListHook sentinel_;
-  std::size_t size_{0};
-
   /// Reset sentinel to self-referencing state (empty list).
   void init_sentinel() noexcept {
     sentinel_.prev = &sentinel_;
     sentinel_.next = &sentinel_;
+  }
+
+  /// After swap/move, edge nodes still point to the old sentinel.
+  /// Fix the first and last node (or self-reference if empty).
+  void fix_sentinel_links() noexcept {
+    if (size_ == 0) {
+      init_sentinel();
+    } else {
+      sentinel_.next->prev = &sentinel_;
+      sentinel_.prev->next = &sentinel_;
+    }
   }
 
   /// Insert `node` immediately after `pos` in the circular chain.

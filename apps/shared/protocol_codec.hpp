@@ -42,7 +42,7 @@ static_assert(sizeof(algo::Side) == 1, "Wire codec assumes Side is 1 byte");
 // ======================================================================
 // UDP Market Data (36 bytes)
 // Wire layout:
-// [seq_num:8][symbol_id:4][side:1][pad:3][price:8][qty:4][exchange_ts:8]
+// [seq_num:8][symbol_id:4][md_msg_type:1][side:1][pad:2][price:8][qty:4][exchange_ts:8]
 // ======================================================================
 
 /// Serialize a MarketDataUpdate into buf (exactly kMarketDataWireSize bytes).
@@ -57,8 +57,9 @@ serialize_market_data(std::span<std::byte> buf,
   auto *p = buf.data();
   sys::store_be64(p + 0, md.seq_num);
   sys::store_be32(p + 8, md.symbol_id);
-  std::memset(p + 12, 0, 4); // side + 3 bytes padding
-  p[12] = static_cast<std::byte>(md.side);
+  std::memset(p + 12, 0, 4); // md_msg_type + side + 2 bytes padding
+  p[12] = static_cast<std::byte>(md.md_msg_type);
+  p[13] = static_cast<std::byte>(md.side);
   sys::store_be64(p + 16, static_cast<std::uint64_t>(md.price));
   sys::store_be32(p + 24, md.qty);
   sys::store_be64(p + 28, static_cast<std::uint64_t>(md.exchange_ts));
@@ -77,7 +78,8 @@ deserialize_market_data(std::span<const std::byte> buf,
   const auto *p = buf.data();
   out.seq_num = sys::load_be64(p + 0);
   out.symbol_id = sys::load_be32(p + 8);
-  out.side = static_cast<algo::Side>(p[12]);
+  out.md_msg_type = static_cast<MdMsgType>(p[12]);
+  out.side = static_cast<algo::Side>(p[13]);
   out.price = static_cast<algo::Price>(sys::load_be64(p + 16));
   out.qty = sys::load_be32(p + 24);
   out.exchange_ts = static_cast<std::int64_t>(sys::load_be64(p + 28));
@@ -326,7 +328,8 @@ deserialize_cancel_reject(std::span<const std::byte> buf,
 
 // ======================================================================
 // ModifyOrder (32 bytes)
-// Wire layout: [client_order_id:8][symbol_id:4][new_price:8][new_qty:4][send_ts:8]
+// Wire layout:
+// [client_order_id:8][symbol_id:4][new_price:8][new_qty:4][send_ts:8]
 // ======================================================================
 
 [[nodiscard]] inline std::size_t
@@ -367,8 +370,7 @@ deserialize_modify_order(std::span<const std::byte> buf,
 // ======================================================================
 
 [[nodiscard]] inline std::size_t
-serialize_modify_ack(std::span<std::byte> buf,
-                     const ModifyAck &ma) noexcept {
+serialize_modify_ack(std::span<std::byte> buf, const ModifyAck &ma) noexcept {
   if (buf.size() < kModifyAckWireSize) [[unlikely]] {
     return 0;
   }
@@ -380,9 +382,8 @@ serialize_modify_ack(std::span<std::byte> buf,
   return kModifyAckWireSize;
 }
 
-[[nodiscard]] inline bool
-deserialize_modify_ack(std::span<const std::byte> buf,
-                       ModifyAck &out) noexcept {
+[[nodiscard]] inline bool deserialize_modify_ack(std::span<const std::byte> buf,
+                                                 ModifyAck &out) noexcept {
   if (buf.size() < kModifyAckWireSize) [[unlikely]] {
     return false;
   }

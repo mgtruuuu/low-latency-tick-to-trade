@@ -108,7 +108,7 @@ TEST(UdpSocketTest, MoveConstructTransfersOwnership) {
   const int original_fd = sock.get();
 
   const UdpSocket moved(std::move(sock));
-  EXPECT_FALSE(sock.is_valid());  // NOLINT(bugprone-use-after-move)
+  EXPECT_FALSE(sock.is_valid()); // NOLINT(bugprone-use-after-move)
   EXPECT_EQ(moved.get(), original_fd);
 }
 
@@ -118,7 +118,7 @@ TEST(UdpSocketTest, MoveAssignClosesPrevious) {
   const int old_fd = s2.get();
 
   s2 = std::move(s1);
-  EXPECT_FALSE(s1.is_valid());  // NOLINT(bugprone-use-after-move)
+  EXPECT_FALSE(s1.is_valid()); // NOLINT(bugprone-use-after-move)
   // Old fd (s2's original) must be closed.
   EXPECT_EQ(fcntl(old_fd, F_GETFD), -1);
 }

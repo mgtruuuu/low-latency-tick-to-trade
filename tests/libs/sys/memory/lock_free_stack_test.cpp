@@ -59,7 +59,7 @@ protected:
   Stack stack_;
 
   void SetUp() override {
-    for (auto & i : node_pool_) {
+    for (auto &i : node_pool_) {
       stack_.push(&i);
     }
   }

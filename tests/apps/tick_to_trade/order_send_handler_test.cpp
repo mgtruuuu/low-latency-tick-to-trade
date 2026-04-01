@@ -16,15 +16,12 @@
 #include "tick_to_trade/tcp_connection.hpp"
 
 #include "shared/protocol.hpp"
-#include "shared/protocol_codec.hpp"
 
 #include "net/message_codec.hpp"
 #include "net/tcp_socket.hpp"
 
-#include "sys/log/async_log_entry.hpp"
-#include "sys/log/log_macros.hpp"
-#include "sys/memory/spsc_queue.hpp"
 #include "sys/nano_clock.hpp"
+#include "tick_to_trade/pipeline_log_entry.hpp"
 
 #include <array>
 #include <cstddef>
@@ -59,15 +56,13 @@ protected:
     ctx_ = make_strategy_ctx<TestStrategy>(ctx_buf_.data(), 0, 0, 0,
                                            kMaxOutstanding, kMaxOutstanding,
                                            kWheelSize, kMaxTimers);
-    om_ = std::construct_at(
-        reinterpret_cast<OrderManager *>(om_storage_),
-        ctx_,
-        /*max_position=*/1000,
-        /*max_order_size=*/100,
-        /*max_notional=*/10'000'000,
-        /*max_orders_per_window=*/100,
-        /*rate_window_ns=*/1'000'000'000,
-        /*order_timeout_ns=*/kTimeoutNs);
+    om_ = std::construct_at(reinterpret_cast<OrderManager *>(om_storage_), ctx_,
+                            /*max_position=*/1000,
+                            /*max_order_size=*/100,
+                            /*max_notional=*/10'000'000,
+                            /*max_orders_per_window=*/100,
+                            /*rate_window_ns=*/1'000'000'000,
+                            /*order_timeout_ns=*/kTimeoutNs);
 
     // Create a connected socket pair for send testing.
     int fds[2];
@@ -112,9 +107,8 @@ protected:
   }
 
   // -- Members --
-  std::array<std::byte,
-             strategy_ctx_buf_size<TestStrategy>(0, 0, 0, kMaxOutstanding,
-                                                 kWheelSize, kMaxTimers)>
+  std::array<std::byte, strategy_ctx_buf_size<TestStrategy>(
+                            0, 0, 0, kMaxOutstanding, kWheelSize, kMaxTimers)>
       ctx_buf_{};
   StrategyCtx ctx_{};
   alignas(OrderManager) std::byte om_storage_[sizeof(OrderManager)]{};
@@ -132,9 +126,9 @@ protected:
   std::array<std::byte, 256> tcp_tx_{};
 
   // LogQueue.
-  std::array<sys::log::LogEntry, 16> log_buf_{};
-  std::optional<sys::log::LogQueue> log_queue_{
-      sys::log::LogQueue::create(log_buf_.data(), 16)};
+  std::array<LogEntry, 16> log_buf_{};
+  std::optional<PipelineLogQueue> log_queue_{
+      PipelineLogQueue::create(log_buf_.data(), sizeof(log_buf_), 16)};
 };
 
 // ---------------------------------------------------------------------------
@@ -142,10 +136,8 @@ protected:
 // ---------------------------------------------------------------------------
 
 TEST_F(OrderSendHandlerTest, NewOrderSerializesAndSends) {
-  const Signal sig{.side = algo::Side::kBid,
-                   .price = 10000,
-                   .qty = 10,
-                   .symbol_id = 1};
+  const Signal sig{
+      .side = algo::Side::kBid, .price = 10000, .qty = 10, .symbol_id = 1};
 
   EXPECT_TRUE(dispatch_signal(sig));
   EXPECT_EQ(handler_.orders_serialized(), 1U);
@@ -156,18 +148,14 @@ TEST_F(OrderSendHandlerTest, NewOrderSerializesAndSends) {
 TEST_F(OrderSendHandlerTest, RiskRejectReturnsTrue) {
   // Fill up to max outstanding.
   for (std::uint32_t i = 0; i < kMaxOutstanding; ++i) {
-    const Signal sig{.side = algo::Side::kBid,
-                     .price = 10000,
-                     .qty = 10,
-                     .symbol_id = 1};
+    const Signal sig{
+        .side = algo::Side::kBid, .price = 10000, .qty = 10, .symbol_id = 1};
     ASSERT_TRUE(dispatch_signal(sig));
   }
 
   // Next signal should be risk-rejected — returns true (no connection death).
-  const Signal sig{.side = algo::Side::kBid,
-                   .price = 10000,
-                   .qty = 10,
-                   .symbol_id = 1};
+  const Signal sig{
+      .side = algo::Side::kBid, .price = 10000, .qty = 10, .symbol_id = 1};
   EXPECT_TRUE(dispatch_signal(sig));
   EXPECT_EQ(handler_.orders_serialized(), kMaxOutstanding);
 }
@@ -178,10 +166,8 @@ TEST_F(OrderSendHandlerTest, RiskRejectReturnsTrue) {
 
 TEST_F(OrderSendHandlerTest, ModifyPathTakenForRestingOrder) {
   // Send an order.
-  const Signal sig{.side = algo::Side::kBid,
-                   .price = 10000,
-                   .qty = 10,
-                   .symbol_id = 1};
+  const Signal sig{
+      .side = algo::Side::kBid, .price = 10000, .qty = 10, .symbol_id = 1};
   ASSERT_TRUE(dispatch_signal(sig));
   // Drain the socket for the NewOrder frame.
   {
@@ -197,10 +183,8 @@ TEST_F(OrderSendHandlerTest, ModifyPathTakenForRestingOrder) {
   om_->on_order_ack(ack);
 
   // Same symbol, different price — should trigger modify path.
-  const Signal modify_sig{.side = algo::Side::kBid,
-                          .price = 11000,
-                          .qty = 10,
-                          .symbol_id = 1};
+  const Signal modify_sig{
+      .side = algo::Side::kBid, .price = 11000, .qty = 10, .symbol_id = 1};
   EXPECT_TRUE(dispatch_signal(modify_sig));
   EXPECT_EQ(handler_.modifies_serialized(), 1U);
   // orders_serialized should NOT increment for modify.
@@ -217,10 +201,8 @@ TEST_F(OrderSendHandlerTest, ClosedSocketReturnsFalse) {
   ::close(recv_fd_);
   recv_fd_ = -1;
 
-  Signal sig{.side = algo::Side::kBid,
-             .price = 10000,
-             .qty = 10,
-             .symbol_id = 1};
+  Signal sig{
+      .side = algo::Side::kBid, .price = 10000, .qty = 10, .symbol_id = 1};
   // Send may succeed initially (buffered) or fail depending on OS.
   // Send enough to trigger EPIPE.
   bool send_ok = true;

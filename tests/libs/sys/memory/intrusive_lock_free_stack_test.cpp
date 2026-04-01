@@ -56,7 +56,7 @@ protected:
   Stack stack_;
 
   void SetUp() override {
-    for (auto & i : node_pool_) {
+    for (auto &i : node_pool_) {
       stack_.push(&i);
     }
   }
@@ -129,7 +129,7 @@ TEST_F(IntrusiveLockFreeStackTest, AllNodesAreRecoverable) {
 TEST_F(IntrusiveLockFreeStackTest, PushAfterDrainSucceeds) {
   // Drain all nodes.
   Order *popped[kPoolSize];
-  for (auto & i : popped) {
+  for (auto &i : popped) {
     i = stack_.try_pop();
     ASSERT_NE(nullptr, i);
   }
@@ -236,7 +236,7 @@ TEST_F(IntrusiveLockFreeStackTest, StressTestNoLeaksOrCorruption) {
   alignas(64) Order large_pool[kLargePoolSize];
   mk::sys::memory::IntrusiveLockFreeStack<Order> large_stack;
 
-  for (auto & i : large_pool) {
+  for (auto &i : large_pool) {
     large_stack.push(&i);
   }
 

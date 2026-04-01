@@ -121,8 +121,7 @@ void bench_pop(Queue &q, const TscCalibration &cal, const char *label) {
 
 /// Benchmark push + pop round-trip.
 template <typename Queue>
-void bench_round_trip(Queue &q, const TscCalibration &cal,
-                      const char *label) {
+void bench_round_trip(Queue &q, const TscCalibration &cal, const char *label) {
   // Warm-up.
   for (int i = 0; i < 500; ++i) {
     std::uint64_t tmp = 0;
@@ -174,9 +173,9 @@ int main() {
   print_header();
   {
     auto region = allocate_hot_rw_region(
-        {.size = SPSCQueue<std::uint64_t>::required_buffer_size(kQueueCapacity)});
-    SPSCQueue<std::uint64_t> q(static_cast<std::uint64_t *>(region.get()),
-                                kQueueCapacity);
+        {.size =
+             SPSCQueue<std::uint64_t>::required_buffer_size(kQueueCapacity)});
+    SPSCQueue<std::uint64_t> q(region.get(), region.size(), kQueueCapacity);
     bench_push(q, cal, "try_push");
     bench_pop(q, cal, "try_pop");
     bench_round_trip(q, cal, "push + pop round-trip");

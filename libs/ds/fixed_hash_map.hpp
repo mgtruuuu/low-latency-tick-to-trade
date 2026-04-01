@@ -191,6 +191,10 @@ class FixedHashMap {
   /// If found_existing is true, slots_[index] contains the key.
   /// If false, slots_[index] is the best insertion point (first tombstone
   /// encountered, or the terminal empty slot).
+  ///
+  /// Note: tombstone reuse adds a branch per probe step. On a hot path where
+  /// inserts are rare or rebuilds are cheap, skip tombstone reuse and let
+  /// the cold-path rebuild reclaim them instead.
   struct ProbeInsertResult {
     std::size_t idx;
     bool found_existing;

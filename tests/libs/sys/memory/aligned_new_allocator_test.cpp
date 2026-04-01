@@ -108,11 +108,10 @@ TEST(AlignedNewAllocatorBasic, StandardTypeAllocationWorks) {
 TEST_F(AlignedNewAllocatorTest, MultipleElementsMaintainAlignmentAndData) {
   order_book_.reserve(100);
   for (std::uint64_t i = 0; i < 10; ++i) {
-    order_book_.emplace_back(
-        Order{.id = i,
-              .price = 100.0 + static_cast<double>(i),
-              .quantity = static_cast<double>(i),
-              .padding = {}});
+    order_book_.emplace_back(Order{.id = i,
+                                   .price = 100.0 + static_cast<double>(i),
+                                   .quantity = static_cast<double>(i),
+                                   .padding = {}});
   }
 
   // Verify start address alignment

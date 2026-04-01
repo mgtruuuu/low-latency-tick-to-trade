@@ -21,6 +21,9 @@
 
 #include "algo/order_book.hpp"
 
+#include <cstddef>
+#include <vector>
+
 #include <benchmark/benchmark.h>
 
 using namespace mk::algo;
@@ -32,7 +35,12 @@ namespace {
 // ============================================================================
 
 // Same capacity as custom rdtsc benchmark for comparable results.
-using BenchBook = OrderBook<16384, 1024, 16384, 2048>;
+constexpr OrderBook::Params kBenchParams{
+    .max_orders = 16384,
+    .max_levels = 1024,
+    .order_map_cap = 16384,
+    .level_map_cap = 2048,
+};
 
 // ============================================================================
 // Benchmarks
@@ -48,7 +56,8 @@ using BenchBook = OrderBook<16384, 1024, 16384, 2048>;
 // benchmark would measure the fast failure path instead of real insertions.
 // NOLINTNEXTLINE(readability-identifier-naming)
 void BM_AddOrderExistingLevel(benchmark::State &state) {
-  BenchBook book;
+  std::vector<std::byte> buf(OrderBook::required_buffer_size(kBenchParams));
+  OrderBook book(buf.data(), buf.size(), kBenchParams);
 
   // Create one level at price 100.
   (void)book.add_order(1, Side::kBid, 100, 10);
@@ -77,7 +86,8 @@ BENCHMARK(BM_AddOrderExistingLevel);
 // Batched: clear the book every 900 orders to stay within MaxLevels.
 // NOLINTNEXTLINE(readability-identifier-naming)
 void BM_AddOrderNewLevel(benchmark::State &state) {
-  BenchBook book;
+  std::vector<std::byte> buf(OrderBook::required_buffer_size(kBenchParams));
+  OrderBook book(buf.data(), buf.size(), kBenchParams);
   std::size_t i = 0;
 
   for (auto _ : state) {
@@ -102,14 +112,13 @@ BENCHMARK(BM_AddOrderNewLevel);
 //
 // Book lives outside the loop — constructed/destroyed once (cold path).
 // Each iteration: clear + repopulate (paused) → cancel all (timed).
-// This avoids BenchBook destructor (munmap syscalls) contaminating the
-// cancel measurement.
 // NOLINTNEXTLINE(readability-identifier-naming)
 void BM_CancelOrder(benchmark::State &state) {
   constexpr std::size_t kOrders = 10'000;
   constexpr std::size_t kLevels = 50;
 
-  BenchBook book;
+  std::vector<std::byte> buf(OrderBook::required_buffer_size(kBenchParams));
+  OrderBook book(buf.data(), buf.size(), kBenchParams);
 
   for (auto _ : state) {
     state.PauseTiming();
@@ -149,7 +158,8 @@ void BM_ModifyOrder(benchmark::State &state) {
   constexpr std::size_t kOrders = 10'000;
   constexpr std::size_t kLevels = 50;
 
-  BenchBook book;
+  std::vector<std::byte> buf(OrderBook::required_buffer_size(kBenchParams));
+  OrderBook book(buf.data(), buf.size(), kBenchParams);
   for (std::size_t i = 0; i < kOrders; ++i) {
     const auto price = static_cast<Price>(100 + (i % kLevels));
     (void)book.add_order(static_cast<OrderId>(i + 1), Side::kBid, price, 100);
@@ -180,7 +190,8 @@ BENCHMARK(BM_ModifyOrder);
 // The fastest operation — baseline for comparison.
 // NOLINTNEXTLINE(readability-identifier-naming)
 void BM_BestBid(benchmark::State &state) {
-  BenchBook book;
+  std::vector<std::byte> buf(OrderBook::required_buffer_size(kBenchParams));
+  OrderBook book(buf.data(), buf.size(), kBenchParams);
 
   for (std::size_t i = 0; i < 100; ++i) {
     (void)book.add_order(static_cast<OrderId>(i + 1), Side::kBid,

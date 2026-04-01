@@ -61,12 +61,12 @@ void bench_fixed_index_free_stack(const TscCalibration &cal) {
       const std::size_t count = std::min(kBatch, kN - measured);
 
       for (std::size_t i = 0; i < count; ++i) {
+        std::uint32_t idx = 0;
         const auto t0 = rdtsc_start();
-        auto idx = stack.pop();
+        (void)stack.pop(idx);
         const auto t1 = rdtsc_end();
         do_not_optimize(idx);
-        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-        popped[i] = *idx;
+        popped[i] = idx;
         g_latencies[measured + i] = t1 - t0;
       }
 
@@ -93,8 +93,7 @@ void bench_fixed_index_free_stack(const TscCalibration &cal) {
 
       // Pre-pop.
       for (std::size_t i = 0; i < count; ++i) {
-        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-        popped[i] = *stack.pop();
+        (void)stack.pop(popped[i]);
       }
 
       // Measure push.
@@ -114,10 +113,10 @@ void bench_fixed_index_free_stack(const TscCalibration &cal) {
     FixedIndexFreeStack<kCapacity> stack;
 
     for (std::size_t i = 0; i < kN; ++i) {
+      std::uint32_t idx = 0;
       const auto t0 = rdtsc_start();
-      auto idx = stack.pop();
-      // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-      stack.push(*idx);
+      (void)stack.pop(idx);
+      stack.push(idx);
       const auto t1 = rdtsc_end();
       do_not_optimize(idx);
       g_latencies[i] = t1 - t0;
@@ -149,12 +148,12 @@ void bench_index_free_stack(const TscCalibration &cal) {
       const std::size_t count = std::min(kBatch, kN - measured);
 
       for (std::size_t i = 0; i < count; ++i) {
+        std::uint32_t idx = 0;
         const auto t0 = rdtsc_start();
-        auto idx = stack.pop();
+        (void)stack.pop(idx);
         const auto t1 = rdtsc_end();
         do_not_optimize(idx);
-        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-        popped[i] = *idx;
+        popped[i] = idx;
         g_latencies[measured + i] = t1 - t0;
       }
 
@@ -179,8 +178,7 @@ void bench_index_free_stack(const TscCalibration &cal) {
       const std::size_t count = std::min(kBatch, kN - measured);
 
       for (std::size_t i = 0; i < count; ++i) {
-        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-        popped[i] = *stack.pop();
+        (void)stack.pop(popped[i]);
       }
 
       for (std::size_t i = 0; i < count; ++i) {
@@ -200,10 +198,10 @@ void bench_index_free_stack(const TscCalibration &cal) {
     auto stack = IndexFreeStack::create(buf_roundtrip, kBufSize, kCapacity).value();
 
     for (std::size_t i = 0; i < kN; ++i) {
+      std::uint32_t idx = 0;
       const auto t0 = rdtsc_start();
-      auto idx = stack.pop();
-      // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-      stack.push(*idx);
+      (void)stack.pop(idx);
+      stack.push(idx);
       const auto t1 = rdtsc_end();
       do_not_optimize(idx);
       g_latencies[i] = t1 - t0;

@@ -102,8 +102,7 @@ BENCHMARK(BM_Fixed_RoundTrip);
 void BM_Runtime_Push(benchmark::State &state) {
   auto region = allocate_hot_rw_region(
       {.size = SPSCQueue<std::uint64_t>::required_buffer_size(kQueueCapacity)});
-  SPSCQueue<std::uint64_t> q(static_cast<std::uint64_t *>(region.get()),
-                              kQueueCapacity);
+  SPSCQueue<std::uint64_t> q(region.get(), region.size(), kQueueCapacity);
 
   for (std::uint32_t i = 0; i < kQueueCapacity / 2; ++i) {
     (void)q.try_push(static_cast<std::uint64_t>(i));
@@ -122,8 +121,7 @@ BENCHMARK(BM_Runtime_Push);
 void BM_Runtime_Pop(benchmark::State &state) {
   auto region = allocate_hot_rw_region(
       {.size = SPSCQueue<std::uint64_t>::required_buffer_size(kQueueCapacity)});
-  SPSCQueue<std::uint64_t> q(static_cast<std::uint64_t *>(region.get()),
-                              kQueueCapacity);
+  SPSCQueue<std::uint64_t> q(region.get(), region.size(), kQueueCapacity);
 
   for (std::uint32_t i = 0; i < kQueueCapacity / 2; ++i) {
     (void)q.try_push(static_cast<std::uint64_t>(i));
@@ -143,8 +141,7 @@ BENCHMARK(BM_Runtime_Pop);
 void BM_Runtime_RoundTrip(benchmark::State &state) {
   auto region = allocate_hot_rw_region(
       {.size = SPSCQueue<std::uint64_t>::required_buffer_size(kQueueCapacity)});
-  SPSCQueue<std::uint64_t> q(static_cast<std::uint64_t *>(region.get()),
-                              kQueueCapacity);
+  SPSCQueue<std::uint64_t> q(region.get(), region.size(), kQueueCapacity);
 
   std::uint64_t val = 0;
   for (auto _ : state) {

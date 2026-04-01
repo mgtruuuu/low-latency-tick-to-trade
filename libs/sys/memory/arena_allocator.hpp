@@ -90,25 +90,7 @@ public:
 
     const RegionIntentConfig cfg{
         .size = size, .numa_node = numa_node, .lock_pages = lock_pages};
-    RegionIntent intent = RegionIntent::kHotRw; // Defensive default.
-    switch (pf) {
-    case PrefaultPolicy::kPopulateWrite:
-      intent = RegionIntent::kHotRw;
-      break;
-    case PrefaultPolicy::kPopulateRead:
-      intent = RegionIntent::kReadMostly;
-      break;
-    case PrefaultPolicy::kNone:
-      intent = RegionIntent::kCold;
-      break;
-    case PrefaultPolicy::kManualWrite:
-      intent = RegionIntent::kHotRw; // Manual prefault → degrade to hot R/W.
-      break;
-    case PrefaultPolicy::kManualRead:
-      intent = RegionIntent::kReadMostly; // Manual prefault → degrade to read.
-      break;
-    }
-    owned_region_ = allocate_region(cfg, intent);
+    owned_region_ = allocate_region(cfg, to_region_intent(pf));
     base_ = owned_region_.data();
     cur_ = base_;
     end_ = base_ + owned_region_.size();
@@ -166,7 +148,16 @@ public:
     return owned_region_.is_valid();
   }
 
-  // [Performance] Returns aligned pointer using bitwise operations
+  /// Typed allocation helper — deduces size and alignment from T.
+  /// Returns nullptr on OOM. Memory is uninitialized — caller must
+  /// construct objects if T is not an implicit-lifetime type.
+  template <typename T> [[nodiscard]] T *alloc(std::size_t count = 1) noexcept {
+    return static_cast<T *>(alloc(count * sizeof(T), alignof(T)));
+  }
+
+  /// Raw allocation — returns aligned, uninitialized memory.
+  /// Returns nullptr on OOM (caller decides policy).
+  // [Performance] Returns aligned pointer using bitwise operations.
   [[nodiscard]] void *alloc(std::size_t bytes, std::size_t alignment) noexcept {
     // 1. Min-alignment enforcement (CPU efficiency)
     alignment = std::max(alignment, alignof(void *));

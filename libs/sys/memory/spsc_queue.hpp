@@ -109,34 +109,50 @@ public:
     return static_cast<std::size_t>(capacity) * sizeof(T);
   }
 
+  /// Element alignment requirement. Needed when carving SPSCQueue storage
+  /// from a larger contiguous region.
+  [[nodiscard]] static constexpr std::size_t element_alignment() noexcept {
+    return alignof(T);
+  }
+
   // ========================================================================
   // Safe Factory Function (returns std::optional -- never abort)
   // ========================================================================
 
-  /// Non-owning factory -- validates capacity, returns nullopt on failure.
-  /// Does NOT auto-round: the caller must ensure the buffer has exactly
-  /// `capacity` elements (rounding up would access past the buffer end).
+  /// Non-owning factory -- validates capacity and buffer, returns nullopt
+  /// on failure. Follows the same void* + buf_bytes convention as HashMap,
+  /// IndexFreeStack, RingBuffer, and TimingWheel.
   [[nodiscard]] static std::optional<SPSCQueue>
-  create(T *external_buf, std::uint32_t capacity) noexcept {
+  create(void *external_buf, std::size_t buf_bytes,
+         std::uint32_t capacity) noexcept {
     if (!is_valid_capacity(capacity) || external_buf == nullptr) {
       return std::nullopt;
     }
-    return SPSCQueue(external_buf, capacity);
+    if (reinterpret_cast<std::uintptr_t>(external_buf) % alignof(T) != 0) {
+      return std::nullopt;
+    }
+    if (buf_bytes < required_buffer_size(capacity)) {
+      return std::nullopt;
+    }
+    return SPSCQueue(external_buf, buf_bytes, capacity);
   }
 
   // ========================================================================
   // Direct Constructor (aborts on invalid input -- startup-time use)
   // ========================================================================
 
-  /// Non-owning constructor -- caller supplies the buffer.
-  /// Aborts on invalid capacity.
-  ///
-  /// @param external_buf  Caller-supplied buffer with at least `capacity`
-  ///                      elements. Must outlive this SPSCQueue.
-  /// @param capacity      Must be a power of two, >= 2.
-  SPSCQueue(T *external_buf, std::uint32_t capacity)
-      : capacity_(capacity), mask_(capacity - 1U), buf_raw_(external_buf) {
+  /// Non-owning constructor -- caller supplies the buffer as void* + size.
+  /// Follows the same convention as HashMap, IndexFreeStack, etc.
+  /// Aborts on invalid capacity, null buffer, or insufficient size.
+  SPSCQueue(void *external_buf, std::size_t buf_bytes,
+            std::uint32_t capacity) noexcept
+      : capacity_(capacity), mask_(capacity - 1U),
+        buf_raw_(static_cast<T *>(external_buf)) {
     abort_if_invalid_capacity(capacity);
+    if (external_buf == nullptr || buf_bytes < required_buffer_size(capacity) ||
+        reinterpret_cast<std::uintptr_t>(external_buf) % alignof(T) != 0) {
+      std::abort();
+    }
   }
 
   // ========================================================================

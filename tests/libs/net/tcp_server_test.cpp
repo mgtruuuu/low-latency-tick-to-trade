@@ -190,7 +190,8 @@ struct AlignedBuffer {
   std::size_t size = 0;
 
   explicit AlignedBuffer(std::size_t sz)
-      : ptr(std::aligned_alloc(64, sz)), size(sz) { // NOLINT(cppcoreguidelines-no-malloc)
+      : ptr(std::aligned_alloc(64, sz)),
+        size(sz) { // NOLINT(cppcoreguidelines-no-malloc)
     if (!ptr) {
       std::abort();
     }
@@ -212,7 +213,7 @@ int connect_to(std::uint16_t port) {
     std::abort();
   }
 
-  struct sockaddr_in addr {};
+  struct sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_port = htons(port);
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -232,8 +233,9 @@ void send_framed(TcpSocket &sock, const char *msg, std::size_t len) {
   auto out = std::span{buf};
   auto written = encode_length_prefix_frame(out, payload);
   ASSERT_TRUE(written.has_value());
-  auto result =
-      sock.send_blocking(reinterpret_cast<const char *>(buf.data()), *written);  // NOLINT(bugprone-unchecked-optional-access)
+  auto result = sock.send_blocking(
+      reinterpret_cast<const char *>(buf.data()),
+      *written); // NOLINT(bugprone-unchecked-optional-access)
   ASSERT_EQ(result.status, TcpSocket::SendStatus::kOk);
 }
 
@@ -272,7 +274,7 @@ std::string recv_framed(TcpSocket &sock) {
 void wake_epoll(std::uint16_t port) {
   const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
   if (fd != -1) {
-    struct sockaddr_in addr {};
+    struct sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -285,9 +287,9 @@ void wake_epoll(std::uint16_t port) {
 
 // Spin-wait helper with timeout.
 template <typename Pred>
-bool
-wait_for(const Pred &pred,
-         std::chrono::milliseconds timeout = std::chrono::milliseconds{2000}) {
+bool wait_for(const Pred &pred,
+              std::chrono::milliseconds timeout = std::chrono::milliseconds{
+                  2000}) {
   auto deadline = std::chrono::steady_clock::now() + timeout;
   while (!pred()) {
     if (std::chrono::steady_clock::now() >= deadline) {

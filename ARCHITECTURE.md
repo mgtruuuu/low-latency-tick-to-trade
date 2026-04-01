@@ -1,11 +1,13 @@
 # Architecture
 
-> This document explains the design decisions behind the tick-to-trade pipeline.
+> This document explains the design decisions behind the system.
 > For system overview, component list, and build instructions, see [README.md](README.md).
 
 ---
 
-## Threading Model
+## System Overview
+
+### tick_to_trade
 
 `tick_to_trade` runs 4 runtime threads:
 
@@ -21,31 +23,31 @@
                                           │  │  config, memory alloc,   │                           │
                                           │  │  socket setup, shutdown  │                           │
                                           │  └──┬─────────┬─────────┬───┘                           │
-                                          │     │         │         │                               │
-                                          │spawn│    spawn│    spawn│                               │
-                                          │     ▼         ▼         │                               │
-┌══ Simulated Exchange ═══┐               │ ┌────────────────────┐  │  ┌────────────────────┐       │
-│   (separate process,    │               │ │ MD Feed Thread     │  │  │ Async Logger       │       │
-│    single-threaded)     │               │ │ (--pin_core_md)    │  │  │(--pin_core_logger) │       │
-│                         │               │ │                    │  │  │                    │       │
-│                         │ UDP multicast │ │ recvmmsg()×64      │  │  │ drain SPSC log     │       │
-│ ┌─────────────────────┐ │ (36B/dgram)   │ │ FeedHandler parse  │  │  │  queues (×2)       │       │
-│ │ MarketData Publisher├────────────────►│ │ spsc.try_push()    │  │  │ TSC-ordered merge  │       │
-│ └─────────────────────┘ │               │ │ rdtsc: t0 [,t1]    │  │  │ write(2) →         │       │
-│                         │               │ └─┬──────────────┬───┘  │  │  pipeline.log      │       │
-│ ┌─────────────────────┐ │               │   │              │      │  │(off critical path) │       │
-│ │ OrderGateway +      │ │ TCP           │   │market        │      │  └────────────────────┘       │
-│ │  MatchingEngine     │◄──────────┐     │   │data SPSC     │      │               ▲  ▲            │
-│ └─────────────────────┘ │         │     │   │              │      │    log SPSC   │  │            │
-└═════════════════════════┘         │     │   ▼              └──────│───────────────┘  │            │
-                                    │     │ ┌─────────────────────┐ │                  │            │
-                                    │     │ │ Strategy Thread     │◄┘                  │            │
-                                    │     │ │(--pin_core_strategy)│                    │            │
-                                    │     │ │                     │                    │            │
-                                    │     │ │ spsc.drain()×64     │      log SPSC      │            │
-                                    └────►│ │  SpreadStrategy     ├────────────────────┘            │
-                                          │ │  RiskCheck (7)      │                                 │
-                                          │ │  OrderManager       │                                 │
+  ┌═══ md_publisher ════┐                 │     │         │         │                               │
+  │                     │                 │spawn│    spawn│    spawn│                               │
+  │                     │                 │     ▼         ▼         │                               │
+  │ shm event poll      │   UDP multicast │ ┌────────────────────┐  │  ┌────────────────────────┐   │
+  │ UDP multicast pub   │   (36B/dgram)   │ │ MD Feed Thread     │  │  │ Async Logger Thread    │   │
+  │                     ├────────────────►│ │(--pin_core_md)     │  │  │(--pin_core_logger)     │   │
+  │                     │                 │ │                    │  │  │                        │   │
+  │                     │                 │ │ recvmmsg()×64      │  │  │ drain SPSC log         │   │
+  │                     │                 │ │ FeedHandler parse  │  │  │  queues (×2)           │   │
+  └═════════════════════┘                 │ │ spsc.try_push()    │  │  │ TSC-ordered merge      │   │
+                                          │ │ rdtsc: t0 [,t1]    │  │  │ write(2) → pipeline.log│   │
+  ┌═ exchange_gateway ══┐                 │ └─┬──────────────┬───┘  │  │                        │   │
+  │ ┌───────┐ ┌───────┐ │                 │   │              │      │  │ (off critical path)    │   │
+  │ │recv T.│ │send T.│ │                 │   │market        │      │  └────────────────────────┘   │
+  │ └───────┘ └───────┘ │                 │   │data SPSC     │      │               ▲  ▲            │
+  │ TCP accept, 1 client│                 │   │              │      │    log SPSC   │  │            │
+  │ shm request/response│                 │   ▼              └──────│───────────────┘  │            │
+  │ frame parse/build   │                 │ ┌─────────────────────┐ │                  │            │
+  │                     │────────────────►│ │ Strategy Thread     │◄┘                  │            │
+  │ heartbeat, throttle │                 │ │(--pin_core_strategy)│                    │            │
+  │                     │       TCP       │ │                     │                    │            │
+  │                     │                 │ │ spsc.drain()×64     │      log SPSC      │            │
+  │                     │◄────────────────│ │  SpreadStrategy     ├────────────────────┘            │
+  │                     │                 │ │  RiskCheck (7)      │                                 │
+  └═════════════════════┘                 │ │  OrderManager       │                                 │
                                           │ │  TCP send/recv      │                                 │
                                           │ │ rdtsc: td [,t2,t3]  │                                 │
                                           │ │         t4          │                                 │
@@ -56,7 +58,7 @@
 The trading critical path is the MD Feed thread + Strategy thread. The async logger is a sidecar — it drains per-producer SPSC log queues from both hot-path threads, merges entries by TSC timestamp, and writes to disk via `write(2)`. It is not on the latency-sensitive path.
 
 **Why two threads, not one?**
-UDP `recvmmsg()` and TCP send/recv are on different sockets with different wake patterns. Separating them eliminates head-of-line blocking: the MD thread never stalls waiting for TCP, and the strategy thread never misses market data while sending orders.
+UDP `recvmmsg()` and TCP send/recv are on different sockets with different wake patterns. Separating them eliminates head-of-line blocking: the MD thread never stalls waiting for TCP, and the strategy thread is less likely to miss market data while sending orders.
 
 **Why not three threads (separate OE gateway)?**
 The current strategy logic and TCP order sending are fast enough on a single core. Adding a third thread would add another queue hop (~5ns) and complexity. The design supports this extension if profiling shows TCP syscall cost dominates.
@@ -66,6 +68,58 @@ Thread pinning is optional. The MD and Strategy threads can be pinned via `pthre
 
 **NUMA binding:**
 Memory regions are bound to a NUMA node selected by priority: (1) explicit `--numa_node` override, (2) NIC node from sysfs (`--nic_iface`), (3) strategy core's node, (4) MD core's node, (5) no binding.
+
+### simulated_exchange
+
+The simulated exchange runs as 3 separate process types communicating via POSIX shared memory SPSC queues:
+
+```
+┌────────────────────────────────────────────────────────────────────────────────┐
+│                          /dev/shm/mk_exchange_events                           │
+│                                                                                │
+│  ┌──────────────────────────────────────────────────────────────────────────┐  │
+│  │  Per-gateway queue pairs (kMaxGateways = 8):                             │  │
+│  │   request_queues[0]  response_queues[0]  ← Gateway 0                     │  │
+│  │   request_queues[1]  response_queues[1]  ← Gateway 1                     │  │
+│  │   ...                                                                    │  │
+│  └──────────────────────────────────────────────────────────────────────────┘  │
+│                                                        ┌────────────────────┐  │
+│                            shared (single Publisher) → │ md_event_queue     │  │
+│                                                        └────────────────────┘  │
+│   engine_ready | shutdown | num_gateways | symbol_count | gateway_claimed[8]   │
+└────────────────────────────────────────────────────────────────────────────────┘
+              ▲▼                           ▲▼                        ▲▼
+┌═══════════════════════════┐  ┌══════════════════════┐  ┌═══════════════════════┐
+│ exchange_gateway × N      │  │ exchange_engine      │  │ exchange_md_publisher │
+│ (1 process per client)    │  │ (single thread)      │  │ (single thread)       │
+│                           │  │                      │  │                       │
+│  ┌─────────────────────┐  │  │ - ExchangeCore       │  │ - Publisher           │
+│  │ recv thread:        │  │  │ - MatchingEngine     │  │   × N symbols         │
+│  │ accept + parse      │  │  │   × N symbols        │  │                       │
+│  │ shm request push    │  │  │                      │  │ shm event polling +   │
+│  └─────────────────────┘  │  │ Round-robin polls    │  │ timer-based ticks     │
+│  ┌─────────────────────┐  │  │ N request queues.    │  │ UDP multicast send    │
+│  │ send thread:        │  │  │ Routes responses by  │  │                       │
+│  │ shm response pop    │  │  │ session_to_gateway[].│  │                       │
+│  │ serialize + send    │  │  │                      │  │                       │
+│  └─────────────────────┘  │  │                      │  │                       │
+└═══════════════════════════┘  └══════════════════════┘  └═══════════════════════┘
+           │     ▲                                                   │
+responses  │ TCP │ orders                                            │
+(Ack/Fill) │     │ (NewOrder etc)                                    │
+           ▼     │                                                   │
+┌═══════════════════════════┐                      UDP (one-way)     │
+│ tick_to_trade (per client)│ ◄──────────────────────────────────────┘
+└═══════════════════════════┘
+```
+
+- **exchange_engine**: Matching engine + session management. No network I/O. Round-robin polls per-gateway request queues, routes responses by `session_to_gateway` mapping (including cross-gateway fills).
+- **exchange_gateway** (× N, one per client): recv thread (accept + parse + request queue push) + send thread (response queue pop + serialize + TCP send). Single-writer guarantee — all TCP writes go through the send thread.
+- **exchange_md_publisher**: Reads fill and BBO events from shared memory, publishes trade and BBO datagrams via UDP multicast (distinguished by `md_msg_type` field). Also generates synthetic quotes at fixed intervals.
+
+**Why separate processes?** Isolating the Engine from network I/O means matching latency is not directly coupled to TCP/UDP syscall delays. Each runtime thread can be pinned to its own core independently.
+
+**Why shared memory IPC?** Same-machine inter-process communication via shared memory SPSC queues avoids the kernel network stack overhead of TCP loopback (order-of-magnitude difference: ~50 ns vs ~10 µs, illustrative).
 
 ---
 
@@ -97,10 +151,10 @@ UDP datagram arrives
                         ▼
 ┌─ Strategy Thread ─────────────────────────────────┐
 │                                                   │
-│  spsc.drain(batch, 64)                              │
-│  t_drain = rdtsc()     ← batch drain timestamp     │
-│  for each item:                                     │
-│    td = rdtsc()        ← per-item timestamp         │
+│  spsc.drain(batch, 64)                            │
+│  t_drain = rdtsc()     ← batch drain timestamp    │
+│  for each item:                                   │
+│    td = rdtsc()        ← per-item timestamp       │
 │                                                   │
 │  SpreadStrategy::on_market_data()                 │
 │    ├─ update per-symbol BBO                       │
@@ -133,17 +187,18 @@ Two independent protocols, chosen for different performance requirements.
 
 ### UDP Market Data (36 bytes, no framing)
 
-One datagram = one update. No header — the datagram boundary is the frame.
+One datagram = one update. No TLV header — the datagram boundary is the frame. The `md_type` field distinguishes BBO updates (quotes) from trades.
 
 ```
- 0       8      12  13  16      24      28       36
- ┌───────┬───────┬───┬───┬───────┬───────┬────────┐
- │seq_num│sym_id │sid│pad│ price │  qty  │exch_ts │
- │ u64   │ u32   │u8 │3B │ i64   │ u32   │  i64   │
- └───────┴───────┴───┴───┴───────┴───────┴────────┘
+ 0       8      12  13  14  16      24      28       36
+ ┌───────┬───────┬───┬───┬───┬───────┬───────┬────────┐
+ │seq_num│sym_id │typ│sid│pad│ price │  qty  │exch_ts │
+ │ u64   │ u32   │u8 │u8 │2B │ i64   │ u32   │  i64   │
+ └───────┴───────┴───┴───┴───┴───────┴───────┴────────┘
+  typ: 0 = BBO update, 1 = Trade
 ```
 
-**Why no header?** Market data is latency-critical and fixed-format. A single bounds check at the start, then unchecked field reads — no per-field validation overhead. Datagram boundaries guarantee message atomicity (no partial reads).
+**Why no TLV header?** Market data is latency-critical and fixed-format. A single bounds check at the start, then unchecked field reads — no per-field validation overhead. Datagram boundaries guarantee message atomicity (no partial reads).
 
 ### TCP Orders (fixed-header framing)
 
@@ -343,50 +398,54 @@ Always-on measurement keeps three metrics enabled without rebuild: `queue_hop` (
 
 ### Compile-Time: Per-Stage Breakdown
 
-Enabled via the `PROFILE_STAGES` CMake option. Adds `feed_parse`, `strategy_eval`, and `order_send` breakdowns. Used for diagnosing which stage causes latency spikes. Zero overhead when disabled. Measured instrumentation overhead: localhost Tick-to-Trade p50 improved from 8.7 µs to 8.1 µs when `PROFILE_STAGES` was disabled (see Key observations below).
+Enabled via the `PROFILE_STAGES` CMake option. Adds `feed_parse`, `strategy_eval`, and `order_send` breakdowns. Used for diagnosing which stage causes latency spikes. Zero overhead when disabled. Measured instrumentation overhead: localhost Tick-to-Trade p50 improved from 6.7 µs to 6.5 µs when `PROFILE_STAGES` was disabled (see Key observations below).
 
 | Approach | Overhead | Rebuild needed? | Use case |
 |----------|----------|-----------------|----------|
 | Always-on queue-hop + queue-wait + sent-order tick-to-trade | low | No | Continuous runtime monitoring |
-| Compile-time per-stage | ~0.6 µs (measured) | Yes | Latency diagnosis |
+| Compile-time per-stage | ~0.2 µs (measured) | Yes | Latency diagnosis |
 | Runtime flag (`atomic<bool>`) | ~1ns branch | No | On-demand profiling |
 
 This project uses the first two. The runtime flag approach avoids rebuilds but adds a branch to every tick — acceptable for most systems, avoided by the most latency-sensitive ones.
 
 ### Measured Results
 
-All numbers are steady-state (excluding first 256 warm-up ticks). `PROFILE_STAGES` enabled. RelWithDebInfo build (`cmake --preset reldbg`).
+All numbers are steady-state (excluding first 256 warm-up ticks). `PROFILE_STAGES` enabled. Release build (`cmake --preset release`). Multi-process exchange (3 processes). Two-machine numbers are from a representative run.
 
 **Test environment:**
 - Trading server: Intel Coffee Lake 8C/16T (2.4 GHz fixed, turbo off), 32 GB, Linux 6.19.7
 - Exchange server: Intel Coffee Lake 6C/12T (2.6 GHz fixed, turbo off), 16 GB, Linux 6.19.8
 - Both: `performance` governor, C-states disabled on isolated cores, `timer_migration=0`, `irqbalance` disabled
 - Trading server: `isolcpus=1-3,9-11`, `nohz_full`, `rcu_nocbs` — MD on core 1, Strategy on core 2, AsyncLogger on core 3
-- Exchange server: `isolcpus=1,7`, `nohz_full`, `rcu_nocbs` — event loop on core 1
+- Exchange server: `performance` governor, no additional tuning (exchange latency is not measured)
 - Network: Gigabit Ethernet switch, isolated LAN (no internet traffic during measurement)
 - Simulated exchange tick interval: 100 µs (~10k ticks/sec)
 
-**Localhost (exchange + pipeline on same machine):**
+**Localhost (exchange + pipeline on same machine, Release build):**
 
 | Stage | p50 | p99 | p999 | Sample population |
 |-------|-----|-----|------|-------------------|
-| Feed Parse | 107 ns | 160 ns | 213 ns | all ticks |
-| Queue Wait | 640 ns | 3.3 µs | 55 µs | all ticks |
-| Queue Hop | 693 ns | 3.3 µs | 55 µs | all ticks |
-| Strategy | 107 ns | 267 ns | 267 ns | all ticks |
-| Order Send | 7.9 µs | 9.4 µs | 12 µs | sent orders only |
-| **Tick-to-Trade** | **8.7 µs** | **10.5 µs** | **55 µs** | sent orders only |
+| Feed Parse | 107 ns | 213 ns | 213 ns | all ticks |
+| Queue Wait | 587 ns | 6.8 µs | 13 µs | all ticks |
+| Queue Hop | 640 ns | 6.9 µs | 13.1 µs | all ticks |
+| Strategy | 107 ns | 213 ns | 267 ns | all ticks |
+| Order Send | 5.8 µs | 7.8 µs | 9.9 µs | sent orders only |
+| Order RTT | 222 µs | 347 µs | 580 µs | sent orders only |
+| **Tick-to-Trade** | **6.7 µs** | **12.7 µs** | **19.1 µs** | sent orders only |
 
-**Two-machine (exchange server → switch → trading server, isolated LAN):**
+**Two-machine (exchange server → switch → trading server, isolated LAN, representative run):**
 
 | Stage | p50 | p99 | p999 | Sample population |
 |-------|-----|-----|------|-------------------|
-| Feed Parse | 107 ns | 160 ns | 267 ns | all ticks |
-| Queue Wait | 853 ns | 27.3 µs | 55 µs | all ticks |
-| Queue Hop | 1.1 µs | 28.4 µs | 55 µs | all ticks |
-| Strategy | 107 ns | 267 ns | 427 ns | all ticks |
-| Order Send | 12.3 µs | 17.1 µs | 54 µs | sent orders only |
-| **Tick-to-Trade** | **16.5 µs** | **34.3 µs** | **55 µs** | sent orders only |
+| Feed Parse | 160 ns | 267 ns | 320 ns | all ticks |
+| Queue Wait | 853 ns | 21 µs | 38 µs | all ticks |
+| Queue Hop | 1.0 µs | 22.8 µs | 54.6 µs | all ticks |
+| Strategy | 107 ns | 213 ns | 320 ns | all ticks |
+| Order Send | 10.1 µs | 15.9 µs | 54 µs | sent orders only |
+| Order RTT | 619 µs | 1.19 ms | — | sent orders only |
+| **Tick-to-Trade** | **11.8 µs** | **28.8 µs** | **54.6 µs** | sent orders only |
+
+Order RTT p999 is omitted — values above 4 ms overflow the histogram's last bucket. Raw max can extend far beyond the histogram range due to timeout/cancel lifecycle outliers and is not representative of median-path network RTT.
 
 **Key observations:**
 
@@ -414,7 +473,7 @@ All numbers are steady-state (excluding first 256 warm-up ticks). `PROFILE_STAGE
 
   Neither is pure SPSC residence time — the component benchmark (~5 ns push+pop) measures that in isolation.
 
-  **Why Queue Wait p99 is large** (~27 µs on two-machine): Queue Wait reflects how long it takes the Strategy thread to return to `drain()`. When the previous loop iteration involves order sends, TCP response processing, or timeout handling, the next `drain()` is delayed — and items pushed by the MD thread during that time accumulate longer Queue Wait values:
+  **Why Queue Wait p99 is large** (~21 µs on two-machine): Queue Wait reflects how long it takes the Strategy thread to return to `drain()`. When the previous loop iteration involves order sends, TCP response processing, or timeout handling, the next `drain()` is delayed — and items pushed by the MD thread during that time accumulate longer Queue Wait values:
 
   ```
   MD thread:   push(A)  push(B)  push(C)  push(D)  push(E)
@@ -427,8 +486,13 @@ All numbers are steady-state (excluding first 256 warm-up ticks). `PROFILE_STAGE
   Queue Wait[E] = t_drain - t0[E] = small (pushed just now)
   ```
 
-  Comparing localhost vs two-machine (Queue Wait p50: 640 ns → 853 ns, Queue Hop p50: 693 ns → 1,120 ns): the increase is consistent with longer Strategy thread loop cycles in the physical network environment (TCP send through NIC vs loopback), though the instrumentation does not isolate the exact cause. Network traversal time itself is not included (`t0` is post-recv).
-- **Order Send dominates Tick-to-Trade on localhost** (~90% of p50). It includes TCP `send()` through the kernel network stack (syscall overhead, socket buffer copy, TCP state machine) — an inherent cost of kernel sockets. On two-machine, Order Send remains the largest single contributor (12.3 µs p50), with Queue Hop adding 1.1 µs.
+  Comparing localhost vs two-machine (Queue Wait p50: 587 ns → 853 ns, Queue Hop p50: 640 ns → 1.0 µs): the increase is consistent with longer Strategy thread loop cycles in the physical network environment (TCP send through NIC vs loopback), though the instrumentation does not isolate the exact cause. Network traversal time itself is not included (`t0` is post-recv).
+
+- **Sample populations differ across metrics.** Queue Wait/Hop are recorded on **every** market data update (all ticks). Tick-to-Trade is recorded **only** when an order or modify is actually sent. This means Queue Wait/Hop p50 reflects the typical loop cycle time across all ticks, while Tick-to-Trade p50 reflects only the order-sending path. At 100 µs tick interval (~10k ticks/sec) with ~100 orders/sec, Queue Wait/Hop has ~100× more samples than Tick-to-Trade, and most of those samples are from "no order sent" loops which are faster.
+
+- **Tick interval affects Queue Wait/Hop but not Tick-to-Trade.** At 1000 µs tick interval, Queue Hop p50 rises to ~5 µs while Tick-to-Trade p50 remains ~12 µs. This is because `t0` is stamped after `recvmmsg()` returns to userspace — not when the packet arrives at the kernel. With a dense feed (100 µs), packets accumulate in the kernel socket buffer before `recvmmsg()` drains them in a batch; the kernel queuing time (`s0` to `t0`) is invisible to Queue Wait/Hop. With a sparse feed (1000 µs), packets rarely queue in the kernel, so `t0 ≈ s0` — but the Strategy loop idle time between ticks becomes visible in Queue Wait/Hop instead. With kernel bypass (e.g., OpenOnload), `t0` is stamped at userspace poll time, making it closer to the actual packet handoff regardless of tick rate.
+
+- **Order Send dominates Tick-to-Trade on localhost** (~90% of p50). It includes TCP `send()` through the kernel network stack (syscall overhead, socket buffer copy, TCP state machine) — an inherent cost of kernel sockets. On two-machine, Order Send remains the largest single contributor (10.1 µs p50), with Queue Hop adding 1.0 µs.
 - **Potential improvement with kernel bypass**: OpenOnload (Solarflare) via `LD_PRELOAD` replaces the kernel network stack with a userspace implementation. The socket API (`send`, `recv`, `epoll`) remains identical — no code changes required. This is expected to significantly reduce Order Send latency, though the exact improvement depends on hardware and has not been measured in this project.
 - **p999 spikes to ~55 µs** are consistent with occasional queue backpressure and OS jitter (timer interrupts, TLB shootdowns), though the instrumentation does not isolate the exact cause. `idle=poll` (forcing all cores to stay in C0) would likely reduce these spikes but was not used in this test due to thermal constraints of the test hardware.
-- **Instrumentation overhead**: with `PROFILE_STAGES` disabled (only Tick-to-Trade, Queue Hop, and Queue Wait recorded), localhost sent-order Tick-to-Trade improved from 8.7 µs to 8.1 µs p50 and 10.5 µs to 10.1 µs p99. The diagnostic per-stage instrumentation adds approximately 0.6 µs p50 / 0.4 µs p99 in this setup.
+- **Instrumentation overhead** (localhost, Release): with `PROFILE_STAGES` disabled (only Tick-to-Trade, Queue Hop, and Queue Wait recorded), localhost sent-order Tick-to-Trade improved from 6.7 µs to 6.5 µs p50 (p99 unchanged at ~12.8 µs). The diagnostic per-stage instrumentation adds approximately 0.2 µs p50 in this setup — small in release builds due to optimized rdtsc inlining.
