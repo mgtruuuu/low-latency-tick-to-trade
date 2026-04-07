@@ -1,22 +1,22 @@
 # Low-Latency Tick-to-Trade
 
-Low-latency C++ trading system and component library for HFT environments.
+Low-latency C++ trading system and component library for HFT-style environments.
 
 Linux x86-64 only. C++20, clang++, zero cross-platform fallbacks.
 
 ## What This Is
 
-1. **Tick-to-Trade Pipeline** (`apps/tick_to_trade/`) -- End-to-end trading system: UDP multicast market data, SPSC queue between threads, strategy evaluation, TCP order entry. Hot-path two-thread architecture plus an async logger sidecar, with RDTSC instrumentation at key stage boundaries (always-on queue-hop, queue-wait, and sent-order latency; per-stage breakdown via `PROFILE_STAGES` compile flag).
+1. **Tick-to-Trade Pipeline** (`apps/tick_to_trade/`) -- End-to-end trading system: UDP multicast market data, SPSC queue between threads, strategy evaluation, TCP order entry. Hot-path two-thread architecture plus an async logger thread. RDTSC instrumentation at key stage boundaries (always-on queue-hop, queue-wait, sent-order latency; per-stage breakdown via `PROFILE_STAGES`).
 
 2. **Multi-Process Simulated Exchange** (`apps/simulated_exchange/`) -- Industry-style exchange with 3 process types: Engine (matching, shared memory queue polling), per-client Gateway (recv/send thread separation), and Market Data Publisher (UDP multicast). Communicates via per-gateway SPSC queue pairs in POSIX shared memory. Supports cross-gateway fills, duplicate order ID detection, typed overload reject, and slot claim via atomic CAS.
 
-3. **Reusable HFT Components** (`libs/`) -- Header-only and static libraries, tested with Google Test and benchmarked with custom rdtsc + Google Benchmark. Zero-allocation hot paths, lock-free data structures, NUMA-aware memory management.
+3. **Reusable Low-Latency Components** (`libs/`) -- Header-only and static libraries, tested with Google Test and benchmarked with custom rdtsc + Google Benchmark. Zero-allocation hot paths, lock-free data structures, NUMA-aware memory management.
 
 ## Architecture
 
 For system architecture, threading model, wire protocol, risk management, and memory layout, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
-**Measured latency** (two-machine, isolated LAN, kernel sockets, tuned Linux, Release build, RDTSC instrumentation):
+**Measured latency** — Tick-to-Trade: **12 µs p50 / 29 µs p99** (sent orders, two-machine isolated LAN, Release build, Intel Coffee Lake, turbo off, isolated cores):
 
 | Stage | p50 | p99 | Sample population |
 |-------|-----|-----|-------------------|
@@ -31,7 +31,7 @@ Measured with `PROFILE_STAGES` enabled for per-stage attribution. Localhost comp
 
 ## Component Highlights
 
-Median (p50) from rdtsc microbenchmarks (`bench/`, RelWithDebInfo, pinned to isolated core, 10k iterations × 3 runs). Actual cost varies with hardware, build config, and cache state.
+Median (p50) from rdtsc microbenchmarks (`bench/`, pinned to isolated core, 10k iterations × 3 runs).
 
 | Component | Description | Median (p50) | p99 |
 |-----------|-------------|-------------|-----|
@@ -45,6 +45,8 @@ Median (p50) from rdtsc microbenchmarks (`bench/`, RelWithDebInfo, pinned to iso
 | `WireWriter/Reader` | Bounded cursor codec with endian conversion | 3ns (5 fields) | 5ns |
 | `PackedCodec` | Zero-copy memcpy codec for same-arch IPC | 3ns per struct | 5ns |
 
+All nanosecond figures are cache-hot steady-state medians from isolated-core microbenchmarks and should not be interpreted as end-to-end production latency.
+
 Cold-path components (not benchmarked — cost is irrelevant to trading latency):
 
 | Component | Description |
@@ -55,7 +57,7 @@ Cold-path components (not benchmarked — cost is irrelevant to trading latency)
 ## Project Structure
 
 ```
-libs/                 Reusable HFT components
+libs/                 Reusable low-latency components
   sys/memory/         MmapRegion, ObjectPool, SPSC queues, lock-free stack
   sys/log/            Signal-safe logger, async logger (per-producer SPSC)
   sys/thread/         CPU affinity, hot-path allocation guard
@@ -65,7 +67,7 @@ libs/                 Reusable HFT components
   algo/               OrderBook (price-time priority), MatchingEngine
 
 apps/                 Application binaries
-  tick_to_trade/      Hot-path two-thread trading pipeline (+ async logger sidecar)
+  tick_to_trade/      Hot-path two-thread trading pipeline (+ async logger thread)
   simulated_exchange/ Multi-process exchange: Engine + N Gateways + MD Publisher
                       (shared memory SPSC IPC, per-client Gateway, recv/send threads)
   shared/             Wire protocol definitions (UDP market data, TCP orders)

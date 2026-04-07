@@ -55,16 +55,19 @@
                                           └═════════════════════════════════════════════════════════┘
 ```
 
-The trading critical path is the MD Feed thread + Strategy thread. The async logger is a sidecar — it drains per-producer SPSC log queues from both hot-path threads, merges entries by TSC timestamp, and writes to disk via `write(2)`. It is not on the latency-sensitive path.
+The trading critical path is the MD Feed thread + Strategy thread. The async logger thread drains per-producer SPSC log queues from both hot-path threads, merges entries by TSC timestamp, and writes to disk via `write(2)`. It is not on the latency-sensitive path.
 
 **Why two threads, not one?**
 UDP `recvmmsg()` and TCP send/recv are on different sockets with different wake patterns. Separating them eliminates head-of-line blocking: the MD thread never stalls waiting for TCP, and the strategy thread is less likely to miss market data while sending orders.
 
 **Why not three threads (separate OE gateway)?**
-The current strategy logic and TCP order sending are fast enough on a single core. Adding a third thread would add another queue hop (~5ns) and complexity. The design supports this extension if profiling shows TCP syscall cost dominates.
+The current strategy logic and TCP order sending are fast enough on a single core. Adding a third thread would add another queue hop and complexity. The design supports this extension if profiling shows TCP syscall cost dominates.
 
 **Core pinning:**
-Thread pinning is optional. The MD and Strategy threads can be pinned via `pthread_setaffinity_np()` to isolated cores (`isolcpus`) using `--pin_core_md` and `--pin_core_strategy`. The async logger can also be pinned with `--pin_core_logger`, but it is off the trading critical path. Leaving a pin flag at `-1` disables pinning for that thread. For low-jitter operation, pinning alone is not sufficient — the deployment also assumes `performance` CPU governor, turbo boost disabled, `isolcpus` + `nohz_full` + `rcu_nocbs` (kernel boot parameters), manual NIC IRQ affinity, disabled C-states on isolated cores, and `timer_migration=0`.
+Thread pinning is optional. The MD and Strategy threads can be pinned via `pthread_setaffinity_np()` to isolated cores (`isolcpus`) using `--pin_core_md` and `--pin_core_strategy`. The async logger can also be pinned with `--pin_core_logger`, but it is off the trading critical path. Leaving a pin flag at `-1` disables pinning for that thread.
+
+**Low-jitter deployment:**
+Pinning alone is not sufficient. The deployment also assumes `performance` CPU governor, turbo boost disabled, `isolcpus` + `nohz_full` + `rcu_nocbs` (kernel boot parameters), manual NIC IRQ affinity, disabled C-states on isolated cores, and `timer_migration=0`.
 
 **NUMA binding:**
 Memory regions are bound to a NUMA node selected by priority: (1) explicit `--numa_node` override, (2) NIC node from sysfs (`--nic_iface`), (3) strategy core's node, (4) MD core's node, (5) no binding.
@@ -124,6 +127,10 @@ responses  │ TCP │ orders                                            │
 ---
 
 ## Data Flow
+
+Instrumented metrics at a glance:
+- **Always-on**: `queue_hop`, `queue_wait`, `tick_to_trade` (sent orders only)
+- **Optional** (`PROFILE_STAGES`): `feed_parse`, `strategy_eval`, `order_send`
 
 A single market data tick traverses up to 7 instrumented rdtsc points. Three are always recorded: `t0` (post-recv), `t_drain` (post-batch-drain), and `td` (per-item processing). `t4` (post-TCP-send) and `tick_to_trade` are recorded only when an order is actually sent. Three more points are added when `PROFILE_STAGES` is enabled: `t1` (post-parse), `t2` (post-strategy), and `t3` (pre-order-send).
 
@@ -421,7 +428,7 @@ All numbers are steady-state (excluding first 256 warm-up ticks). `PROFILE_STAGE
 - Network: Gigabit Ethernet switch, isolated LAN (no internet traffic during measurement)
 - Simulated exchange tick interval: 100 µs (~10k ticks/sec)
 
-**Localhost (exchange + pipeline on same machine, Release build):**
+**Localhost** (exchange + pipeline on same machine, Release build) — Tick-to-Trade **6.7 µs p50**:
 
 | Stage | p50 | p99 | p999 | Sample population |
 |-------|-----|-----|------|-------------------|
@@ -433,7 +440,7 @@ All numbers are steady-state (excluding first 256 warm-up ticks). `PROFILE_STAGE
 | Order RTT | 222 µs | 347 µs | 580 µs | sent orders only |
 | **Tick-to-Trade** | **6.7 µs** | **12.7 µs** | **19.1 µs** | sent orders only |
 
-**Two-machine (exchange server → switch → trading server, isolated LAN, representative run):**
+**Two-machine** (exchange server → switch → trading server, isolated LAN, representative run) — Tick-to-Trade **11.8 µs p50**:
 
 | Stage | p50 | p99 | p999 | Sample population |
 |-------|-----|-----|------|-------------------|
@@ -448,6 +455,8 @@ All numbers are steady-state (excluding first 256 warm-up ticks). `PROFILE_STAGE
 Order RTT p999 is omitted — values above 4 ms overflow the histogram's last bucket. Raw max can extend far beyond the histogram range due to timeout/cancel lifecycle outliers and is not representative of median-path network RTT.
 
 **Key observations:**
+
+#### Interpretation
 
 - **Feed Parse and Strategy are network-independent** (~100-300 ns). These measure pure CPU work — parsing a fixed 36-byte datagram and evaluating a spread condition. Consistent across localhost and two-machine setups.
 - **Queue Wait and Queue Hop** both start at `t0` (post-recv, before parse) but end at different points:
@@ -488,9 +497,13 @@ Order RTT p999 is omitted — values above 4 ms overflow the histogram's last bu
 
   Comparing localhost vs two-machine (Queue Wait p50: 587 ns → 853 ns, Queue Hop p50: 640 ns → 1.0 µs): the increase is consistent with longer Strategy thread loop cycles in the physical network environment (TCP send through NIC vs loopback), though the instrumentation does not isolate the exact cause. Network traversal time itself is not included (`t0` is post-recv).
 
+#### Caveats
+
 - **Sample populations differ across metrics.** Queue Wait/Hop are recorded on **every** market data update (all ticks). Tick-to-Trade is recorded **only** when an order or modify is actually sent. This means Queue Wait/Hop p50 reflects the typical loop cycle time across all ticks, while Tick-to-Trade p50 reflects only the order-sending path. At 100 µs tick interval (~10k ticks/sec) with ~100 orders/sec, Queue Wait/Hop has ~100× more samples than Tick-to-Trade, and most of those samples are from "no order sent" loops which are faster.
 
 - **Tick interval affects Queue Wait/Hop but not Tick-to-Trade.** At 1000 µs tick interval, Queue Hop p50 rises to ~5 µs while Tick-to-Trade p50 remains ~12 µs. This is because `t0` is stamped after `recvmmsg()` returns to userspace — not when the packet arrives at the kernel. With a dense feed (100 µs), packets accumulate in the kernel socket buffer before `recvmmsg()` drains them in a batch; the kernel queuing time (`s0` to `t0`) is invisible to Queue Wait/Hop. With a sparse feed (1000 µs), packets rarely queue in the kernel, so `t0 ≈ s0` — but the Strategy loop idle time between ticks becomes visible in Queue Wait/Hop instead. With kernel bypass (e.g., OpenOnload), `t0` is stamped at userspace poll time, making it closer to the actual packet handoff regardless of tick rate.
+
+#### Bottlenecks and improvements
 
 - **Order Send dominates Tick-to-Trade on localhost** (~90% of p50). It includes TCP `send()` through the kernel network stack (syscall overhead, socket buffer copy, TCP state machine) — an inherent cost of kernel sockets. On two-machine, Order Send remains the largest single contributor (10.1 µs p50), with Queue Hop adding 1.0 µs.
 - **Potential improvement with kernel bypass**: OpenOnload (Solarflare) via `LD_PRELOAD` replaces the kernel network stack with a userspace implementation. The socket API (`send`, `recv`, `epoll`) remains identical — no code changes required. This is expected to significantly reduce Order Send latency, though the exact improvement depends on hardware and has not been measured in this project.
