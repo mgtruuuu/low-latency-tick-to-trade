@@ -178,7 +178,7 @@ private:
 
     // Phase 1: drain all queues into separate batch buffers.
     for (std::size_t q = 0; q < num_queues_; ++q) {
-      counts[q] = queues_[q]->drain(batches[q]);
+      counts[q] = queues_[q]->drain(batches[q], kDrainBatch);
       total += counts[q];
     }
 

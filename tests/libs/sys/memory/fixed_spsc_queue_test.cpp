@@ -147,7 +147,7 @@ TEST_F(FixedSPSCQueueTest, DrainReturnsAllItems) {
   }
 
   std::uint64_t batch[8]{};
-  const std::size_t n = q_.drain(batch);
+  const std::size_t n = q_.drain(batch, 8);
   EXPECT_EQ(5U, n);
 
   for (std::size_t i = 0; i < n; ++i) {
@@ -278,7 +278,8 @@ TEST(FixedSPSCQueueShmTest, PlacementNewInSharedMemory) {
       mk::sys::memory::PrefaultPolicy::kPopulateRead);
   ASSERT_TRUE(consumer_region.has_value());
 
-  // NOLINTNEXTLINE(bugprone-unchecked-optional-access, *-pro-type-reinterpret-cast)
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access,
+  // *-pro-type-reinterpret-cast)
   auto *consumer_q = reinterpret_cast<Queue *>(consumer_region->data());
 
   // Producer pushes through one mapping, consumer pops through another.

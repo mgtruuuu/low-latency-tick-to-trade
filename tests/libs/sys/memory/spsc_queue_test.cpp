@@ -123,7 +123,7 @@ TEST_F(SPSCQueueTest, DrainReturnsAllItems) {
   }
 
   std::uint64_t batch[8]{};
-  const std::size_t n = q_.drain(batch);
+  const std::size_t n = q_.drain(batch, 8);
   EXPECT_EQ(5U, n);
 
   for (std::size_t i = 0; i < n; ++i) {

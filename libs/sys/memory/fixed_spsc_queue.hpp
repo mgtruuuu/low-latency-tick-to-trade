@@ -24,6 +24,7 @@
 #include <algorithm> // std::min
 #include <array>
 #include <atomic>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>     // std::memcpy
@@ -149,16 +150,15 @@ public:
   ///   Thread A (consumer): auto n = return_q.drain(batch);
   ///                        for (size_t i = 0; i < n; ++i)
   ///                        pool.destroy(batch[i]);
-  template <std::size_t MaxBatch>
-  [[nodiscard]] std::size_t drain(T (&out)[MaxBatch]) noexcept {
-    static_assert(MaxBatch > 0, "MaxBatch must be > 0");
+  [[nodiscard]] std::size_t drain(T *out, std::size_t max_count) noexcept {
+    assert(out != nullptr && max_count > 0);
     const std::uint32_t h = head_.load(std::memory_order_relaxed);
     const std::uint32_t t = tail_.load(std::memory_order_acquire);
     if (h == t) {
       return 0;
     }
     const auto available = static_cast<std::size_t>(t - h);
-    const auto n = std::min(available, MaxBatch);
+    const auto n = std::min(available, max_count);
 
     if constexpr (std::is_trivially_copyable_v<T>) {
       // Trivially copyable: bulk memcpy is faster than per-element copy
@@ -166,8 +166,9 @@ public:
       // Ring buffer wrap-around requires at most 2 memcpy calls:
       //   [start .. end-of-buffer] then [0 .. remainder]
       const std::uint32_t start = h & kMask;
-      const auto first = std::min(static_cast<std::uint32_t>(n),
-                                  static_cast<std::uint32_t>(CapacityPow2) - start);
+      const auto first =
+          std::min(static_cast<std::uint32_t>(n),
+                   static_cast<std::uint32_t>(CapacityPow2) - start);
       std::memcpy(out, buf_.data() + start, first * sizeof(T));
       const auto second = static_cast<std::uint32_t>(n) - first;
       if (second > 0) {

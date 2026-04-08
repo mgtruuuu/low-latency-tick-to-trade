@@ -41,6 +41,7 @@
 
 #include <algorithm> // std::min
 #include <atomic>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstring> // std::memcpy
@@ -277,16 +278,15 @@ public:
   ///   Same as try_pop, but the release store fires once after ALL reads,
   ///   not once per item. This amortizes the fence cost over N items.
   ///   Mirror of try_push_batch on the producer side.
-  template <std::size_t MaxBatch>
-  [[nodiscard]] std::size_t drain(T (&out)[MaxBatch]) noexcept {
-    static_assert(MaxBatch > 0, "MaxBatch must be > 0");
+  [[nodiscard]] std::size_t drain(T *out, std::size_t max_count) noexcept {
+    assert(out != nullptr && max_count > 0);
     const std::uint32_t h = head_.load(std::memory_order_relaxed);
     const std::uint32_t t = tail_.load(std::memory_order_acquire);
     if (h == t) {
       return 0;
     }
     const auto available = static_cast<std::size_t>(t - h);
-    const auto n = std::min(available, MaxBatch);
+    const auto n = std::min(available, max_count);
 
     // T is guaranteed trivially_copyable (static_assert above), so memcpy
     // is safe and faster than per-element copy assignment -- the compiler
