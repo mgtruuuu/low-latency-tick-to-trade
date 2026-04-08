@@ -175,13 +175,13 @@ public:
   /// @param out    NewOrder written only when returning true.
   /// @return true if order generated, false if risk limits breached.
   [[nodiscard]] bool on_signal(const Signal &signal, NewOrder &out) noexcept {
-    // Risk check 0: kill switch blocks ALL new orders.
+    // Risk check 1: kill switch blocks ALL new orders.
     if (kill_switch_state_ != KillSwitchState::kNormal) [[unlikely]] {
       risk_rejects_killswitch_.fetch_add(1, std::memory_order_relaxed);
       return false;
     }
 
-    // Risk check 1: outstanding order limit (cheapest — integer compare).
+    // Risk check 2: outstanding order limit (cheapest — integer compare).
     if (outstanding_count_ >= ctx_.max_outstanding) [[unlikely]] {
       risk_rejects_outstanding_.fetch_add(1, std::memory_order_relaxed);
       return false;
@@ -190,20 +190,20 @@ public:
     // symbol_id validated at event loop boundary — direct index.
     const auto sym_idx = signal.symbol_id - 1;
 
-    // Risk check 2: per-symbol outstanding limit.
+    // Risk check 3: per-symbol outstanding limit.
     if (ctx_.outstanding_per_symbol[sym_idx] >=
         ctx_.max_outstanding_per_symbol) [[unlikely]] {
       risk_rejects_per_symbol_.fetch_add(1, std::memory_order_relaxed);
       return false;
     }
 
-    // Risk check 3: max order size (single integer compare).
+    // Risk check 4: max order size (single integer compare).
     if (signal.qty > max_order_size_) [[unlikely]] {
       risk_rejects_size_.fetch_add(1, std::memory_order_relaxed);
       return false;
     }
 
-    // Risk check 3: max notional per order (one multiply + compare).
+    // Risk check 5: max notional per order (one multiply + compare).
     // Price is int64_t, Qty is uint32_t — product fits in int64_t for
     // typical tick prices (< 2^31) and quantities (< 2^31).
     const auto notional =
@@ -213,7 +213,7 @@ public:
       return false;
     }
 
-    // Risk check 4: order rate limit (token bucket).
+    // Risk check 6: order rate limit (token bucket).
     // Real exchanges impose per-second message limits (e.g., CME: 50
     // msgs/sec per session, Nasdaq: configurable). Token bucket refills
     // tokens at a constant rate — no boundary-burst problem unlike
@@ -239,7 +239,7 @@ public:
       }
     }
 
-    // Risk check 5: per-symbol position limit.
+    // Risk check 7: per-symbol position limit.
     // Simulate the worst-case position if this order fills.
     auto projected_position = ctx_.net_position[sym_idx];
     if (signal.side == algo::Side::kBid) {

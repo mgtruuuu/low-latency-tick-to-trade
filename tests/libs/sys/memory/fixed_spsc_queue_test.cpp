@@ -268,8 +268,11 @@ TEST(FixedSPSCQueueShmTest, PlacementNewInSharedMemory) {
       mk::sys::memory::PrefaultPolicy::kPopulateWrite);
   ASSERT_TRUE(producer_region.has_value()) << "Failed to create shared memory";
 
+  // NOLINTBEGIN(bugprone-unchecked-optional-access, *-owning-memory,
+  //             *-pro-type-reinterpret-cast)
+  // clang-tidy cannot track GTest ASSERT_TRUE guarding optional access.
+
   // Placement new — construct the queue in shared memory.
-  // NOLINTNEXTLINE(*-owning-memory, bugprone-unchecked-optional-access)
   auto *producer_q = new (producer_region->data()) Queue{};
 
   // Consumer side: open existing shared memory (separate virtual mapping).
@@ -278,9 +281,9 @@ TEST(FixedSPSCQueueShmTest, PlacementNewInSharedMemory) {
       mk::sys::memory::PrefaultPolicy::kPopulateRead);
   ASSERT_TRUE(consumer_region.has_value());
 
-  // NOLINTNEXTLINE(bugprone-unchecked-optional-access,
-  // *-pro-type-reinterpret-cast)
   auto *consumer_q = reinterpret_cast<Queue *>(consumer_region->data());
+  // NOLINTEND(bugprone-unchecked-optional-access, *-owning-memory,
+  //           *-pro-type-reinterpret-cast)
 
   // Producer pushes through one mapping, consumer pops through another.
   ASSERT_TRUE(producer_q->try_push(12345ULL));
