@@ -16,13 +16,13 @@
 
 #pragma once
 
+#include "latency_tracker.hpp"
 #include "md_types.hpp"
 #include "order_manager.hpp"
 #include "order_response_handler.hpp"
 #include "order_send_handler.hpp"
 #include "strategy_policy.hpp"
 #include "tcp_connection.hpp"
-#include "latency_tracker.hpp"
 
 #include "shared/protocol.hpp"
 #include "shared/protocol_codec.hpp"
@@ -39,8 +39,8 @@
 #include "sys/thread/affinity.hpp"
 #include "sys/thread/hot_path_control.hpp"
 
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <netinet/in.h>
@@ -58,46 +58,44 @@ namespace mk::app {
 /// Template parameter StrategyT must satisfy StrategyPolicy concept.
 ///
 /// Non-copyable, non-movable (holds references + owns thread).
-template <StrategyPolicy StrategyT>
-class StrategyThread {
+template <StrategyPolicy StrategyT> class StrategyThread {
 public:
   /// Construction parameters. All references must outlive the StrategyThread.
   struct Config {
-    // Core pipeline
+    // Pipeline core
     MdToStrategyQueue &md_queue;
-    net::TcpSocket &tcp_sock;
-    net::EpollWrapper &epoll;
     StrategyT &strategy;
     OrderManager &order_mgr;
-    LatencyTracker &tracker;
-    // TCP buffers (from StrategyCtx)
+    // Network
+    net::TcpSocket &tcp_sock;
+    net::EpollWrapper &epoll;
+    ConnectionState &conn;
     std::span<std::byte> tcp_tx_buf;
     std::span<std::byte> scratch;
     char *tcp_rx_data{nullptr};
     std::size_t tcp_rx_size{0};
-    // Connection
-    ConnectionState &conn;
-    const char *exchange_host{nullptr};
-    std::uint16_t exchange_port{0};
-    // Control
+    // Lifecycle
     std::atomic_flag &stop_flag;
     std::atomic_flag &kill_switch_flag;
+    // Diagnostics
+    LatencyTracker &tracker;
+    PipelineLogQueue &log_queue;
+    // Config (value copies)
+    const char *exchange_host{nullptr};
+    std::uint16_t exchange_port{0};
     std::int32_t pin_core{-1};
     std::int64_t stats_interval_ns{0};
-    // Logging
-    PipelineLogQueue &log_queue;
   };
 
   explicit StrategyThread(const Config &cfg) noexcept
-      : md_queue_(cfg.md_queue), tcp_sock_(cfg.tcp_sock), epoll_(cfg.epoll),
-        strategy_(cfg.strategy), order_mgr_(cfg.order_mgr),
-        tracker_(cfg.tracker), tcp_tx_buf_(cfg.tcp_tx_buf),
-        scratch_(cfg.scratch), tcp_rx_data_(cfg.tcp_rx_data),
-        tcp_rx_size_(cfg.tcp_rx_size), conn_(cfg.conn),
-        exchange_host_(cfg.exchange_host), exchange_port_(cfg.exchange_port),
+      : md_queue_(cfg.md_queue), strategy_(cfg.strategy),
+        order_mgr_(cfg.order_mgr), tcp_sock_(cfg.tcp_sock), epoll_(cfg.epoll),
+        conn_(cfg.conn), tcp_tx_buf_(cfg.tcp_tx_buf), scratch_(cfg.scratch),
+        tcp_rx_data_(cfg.tcp_rx_data), tcp_rx_size_(cfg.tcp_rx_size),
         stop_flag_(cfg.stop_flag), kill_switch_flag_(cfg.kill_switch_flag),
-        pin_core_(cfg.pin_core), stats_interval_ns_(cfg.stats_interval_ns),
-        log_queue_(cfg.log_queue) {}
+        tracker_(cfg.tracker), log_queue_(cfg.log_queue),
+        exchange_host_(cfg.exchange_host), exchange_port_(cfg.exchange_port),
+        pin_core_(cfg.pin_core), stats_interval_ns_(cfg.stats_interval_ns) {}
 
   // Non-copyable, non-movable (holds references + owns thread).
   StrategyThread(const StrategyThread &) = delete;
@@ -126,8 +124,7 @@ public:
   [[nodiscard]] const OrderSendHandler &send_handler() const noexcept {
     return send_handler_;
   }
-  [[nodiscard]] const OrderResponseHandler &
-  response_handler() const noexcept {
+  [[nodiscard]] const OrderResponseHandler &response_handler() const noexcept {
     return response_handler_;
   }
 
@@ -147,8 +144,8 @@ private:
                                numa, '\n');
         }
       } else {
-        sys::log::signal_log("[STRATEGY] WARNING: pin failed: ",
-                             strerror(result), '\n');
+        sys::log::signal_log(
+            "[STRATEGY] WARNING: pin failed: ", strerror(result), '\n');
       }
     }
 
@@ -161,7 +158,7 @@ private:
     // Drain batch buffer — on stack, sized for one batch cycle.
     // Matches kMdBatchSize in main.cpp so consumer drains at producer rate.
     constexpr std::size_t kDrainBatch = 64;
-    QueuedUpdate batch[kDrainBatch]; // NOLINT(cppcoreguidelines-avoid-c-arrays)
+    std::array<QueuedUpdate, kDrainBatch> batch{};
 
     // Epoll for TCP events only (UDP is on the MD thread).
     std::array<struct epoll_event, 8> events{};
@@ -169,23 +166,21 @@ private:
     while (!stop_flag_.test(std::memory_order_relaxed)) {
       // -- Kill switch logic --
       if (kill_switch_flag_.test(std::memory_order_relaxed) &&
-          !order_mgr_.is_killed() &&
-          conn_.state == TcpState::kConnected) [[unlikely]] {
+          !order_mgr_.is_killed() && conn_.state == TcpState::kConnected)
+          [[unlikely]] {
         auto ks_batch = order_mgr_.trigger_kill_switch();
         for (std::uint32_t ci = 0; ci < ks_batch.count; ++ci) {
-          auto plen =
-              serialize_cancel_order(scratch_, ks_batch.cancels[ci]);
+          auto plen = serialize_cancel_order(scratch_, ks_batch.cancels[ci]);
           if (plen > 0) [[likely]] {
-            auto tlen = pack_tcp_message(
-                tcp_tx_buf_, MsgType::kCancelOrder,
-                std::span{scratch_.data(), plen});
+            auto tlen = pack_tcp_message(tcp_tx_buf_, MsgType::kCancelOrder,
+                                         std::span{scratch_.data(), plen});
             if (tlen > 0) [[likely]] {
               auto result = tcp_sock_.send_nonblocking(
                   reinterpret_cast<const char *>(tcp_tx_buf_.data()), tlen);
               if (!check_send_result(result, conn_, "KillSwitchCancel"))
                   [[unlikely]] {
-                disconnect_and_reconnect(tcp_sock_, epoll_, conn_,
-                                         tcp_rx_read_, tcp_rx_write_,
+                disconnect_and_reconnect(tcp_sock_, epoll_, conn_, tcp_rx_read_,
+                                         tcp_rx_write_,
                                          "Send failed during kill switch");
                 break;
               }
@@ -205,30 +200,25 @@ private:
         const auto now = sys::monotonic_nanos();
 
         if (now - conn_.last_hb_sent >= kHeartbeatIntervalNs) {
-          auto hb_len = pack_tcp_message(
-              tcp_tx_buf_, MsgType::kHeartbeat, {});
+          auto hb_len = pack_tcp_message(tcp_tx_buf_, MsgType::kHeartbeat, {});
           if (hb_len > 0) [[likely]] {
             auto result = tcp_sock_.send_nonblocking(
                 reinterpret_cast<const char *>(tcp_tx_buf_.data()), hb_len);
             if (!check_send_result(result, conn_, "Heartbeat")) [[unlikely]] {
-              disconnect_and_reconnect(
-                  tcp_sock_, epoll_, conn_, tcp_rx_read_, tcp_rx_write_,
-                  "Heartbeat send failed — reconnecting");
+              disconnect_and_reconnect(tcp_sock_, epoll_, conn_, tcp_rx_read_,
+                                       tcp_rx_write_,
+                                       "Heartbeat send failed — reconnecting");
             }
           }
           conn_.last_hb_sent = now;
           conn_.heartbeats_sent.fetch_add(1, std::memory_order_relaxed);
-          (void)log_connection(
-              log_queue_, kThreadIdStrategy,
-              LogLevel::kDebug,
-              ConnectionEvent::kHeartbeatSent);
+          (void)log_connection(log_queue_, kThreadIdStrategy, LogLevel::kDebug,
+                               ConnectionEvent::kHeartbeatSent);
         }
 
         if (now - conn_.last_hb_recv >= kHeartbeatTimeoutNs) [[unlikely]] {
-          (void)log_connection(
-              log_queue_, kThreadIdStrategy,
-              LogLevel::kWarn,
-              ConnectionEvent::kDisconnect);
+          (void)log_connection(log_queue_, kThreadIdStrategy, LogLevel::kWarn,
+                               ConnectionEvent::kDisconnect);
           disconnect_and_reconnect(tcp_sock_, epoll_, conn_, tcp_rx_read_,
                                    tcp_rx_write_,
                                    "Heartbeat timeout — reconnecting");
@@ -304,17 +294,16 @@ private:
           auto plen =
               serialize_cancel_order(scratch_, timeout_batch.cancels[ti]);
           if (plen > 0) [[likely]] {
-            auto tlen = pack_tcp_message(
-                tcp_tx_buf_, MsgType::kCancelOrder,
-                std::span{scratch_.data(), plen});
+            auto tlen = pack_tcp_message(tcp_tx_buf_, MsgType::kCancelOrder,
+                                         std::span{scratch_.data(), plen});
             if (tlen > 0) [[likely]] {
               auto result = tcp_sock_.send_nonblocking(
                   reinterpret_cast<const char *>(tcp_tx_buf_.data()), tlen);
               if (!check_send_result(result, conn_, "TimeoutCancel"))
                   [[unlikely]] {
-                disconnect_and_reconnect(
-                    tcp_sock_, epoll_, conn_, tcp_rx_read_, tcp_rx_write_,
-                    "Send failed during timeout cancel");
+                disconnect_and_reconnect(tcp_sock_, epoll_, conn_, tcp_rx_read_,
+                                         tcp_rx_write_,
+                                         "Send failed during timeout cancel");
                 break;
               }
             }
@@ -327,18 +316,17 @@ private:
         const auto now = sys::monotonic_nanos();
         if (now - last_stats_dump >= stats_interval_ns_) [[unlikely]] {
           last_stats_dump = now;
-          sys::log::signal_log(
-              "[STATS] ticks:", strategy_.signals_generated(),
-              " orders:", order_mgr_.orders_sent(),
-              " fills:", order_mgr_.fills_received(),
-              " rejects:", order_mgr_.rejects_received(),
-              " timeouts:", order_mgr_.timeouts_fired(), '\n');
+          sys::log::signal_log("[STATS] ticks:", strategy_.signals_generated(),
+                               " orders:", order_mgr_.orders_sent(),
+                               " fills:", order_mgr_.fills_received(),
+                               " rejects:", order_mgr_.rejects_received(),
+                               " timeouts:", order_mgr_.timeouts_fired(), '\n');
         }
       }
 
       // -- Drain SPSC queue: process market data from MD thread --
       {
-        auto count = md_queue_.drain(batch);
+        auto count = md_queue_.drain(batch.data(), batch.size());
         // Timestamp immediately after drain — same for all items in this batch.
         // Used to measure pure queue wait (t_drain - t0), excluding
         // batch-internal processing accumulation that inflates per-item
@@ -355,9 +343,8 @@ private:
           if (t_dequeue > t0) {
             const auto hop_cycles = t_dequeue - t0;
             tracker_.record_queue_latency(hop_cycles);
-            (void)log_latency(
-                log_queue_, kThreadIdStrategy,
-                LatencyStage::kQueueHop, hop_cycles, t0);
+            (void)log_latency(log_queue_, kThreadIdStrategy,
+                              LatencyStage::kQueueHop, hop_cycles, t0);
           }
 
           // Record pure queue wait (t_drain - t0).
@@ -377,9 +364,8 @@ private:
             auto t2 = sys::rdtsc();
             auto strat_cycles = t2 - t_dequeue;
             tracker_.record_strategy(strat_cycles);
-            (void)log_latency(
-                log_queue_, kThreadIdStrategy,
-                LatencyStage::kStrategy, strat_cycles, t0);
+            (void)log_latency(log_queue_, kThreadIdStrategy,
+                              LatencyStage::kStrategy, strat_cycles, t0);
           }
 #endif
 
@@ -393,8 +379,7 @@ private:
 
           if (!send_handler_.on_signal(signal, order_mgr_, tracker_, tcp_sock_,
                                        scratch_, tcp_tx_buf_, t0, conn_,
-                                       log_queue_))
-              [[unlikely]] {
+                                       log_queue_)) [[unlikely]] {
             disconnect_and_reconnect(
                 tcp_sock_, epoll_, conn_, tcp_rx_read_, tcp_rx_write_,
                 "Send failed in order path — reconnecting");
@@ -479,8 +464,7 @@ private:
 
             while (tcp_rx_write_ - tcp_rx_read_ >= net::kMessageHeaderSize) {
               auto view = std::as_bytes(std::span<const char>{
-                  tcp_rx_data_ + tcp_rx_read_,
-                  tcp_rx_write_ - tcp_rx_read_});
+                  tcp_rx_data_ + tcp_rx_read_, tcp_rx_write_ - tcp_rx_read_});
 
               net::ParsedMessageView msg;
               if (!net::unpack_message(view, msg)) {
@@ -519,25 +503,35 @@ private:
     sys::log::signal_log("[STRATEGY] Strategy loop exited\n");
   }
 
-  // -- References to externally-owned state --
+  // -- Non-owning (references, spans, pointers to caller-owned data) --
+
+  // Pipeline core
   MdToStrategyQueue &md_queue_;
-  net::TcpSocket &tcp_sock_;
-  net::EpollWrapper &epoll_;
   StrategyT &strategy_;
   OrderManager &order_mgr_;
-  LatencyTracker &tracker_;
+
+  // Network
+  net::TcpSocket &tcp_sock_;
+  net::EpollWrapper &epoll_;
+  ConnectionState &conn_;
   std::span<std::byte> tcp_tx_buf_;
   std::span<std::byte> scratch_;
   char *tcp_rx_data_;
   std::size_t tcp_rx_size_;
-  ConnectionState &conn_;
-  const char *exchange_host_;
-  std::uint16_t exchange_port_;
+
+  // Lifecycle
   std::atomic_flag &stop_flag_;
   std::atomic_flag &kill_switch_flag_;
+
+  // Diagnostics
+  LatencyTracker &tracker_;
+  PipelineLogQueue &log_queue_;
+
+  // -- Value copies (config, set once at construction) --
+  const char *exchange_host_;
+  std::uint16_t exchange_port_;
   std::int32_t pin_core_;
   std::int64_t stats_interval_ns_;
-  PipelineLogQueue &log_queue_;
 
   // -- Loop-local state (owned — formerly local variables) --
   std::size_t tcp_rx_read_{0};

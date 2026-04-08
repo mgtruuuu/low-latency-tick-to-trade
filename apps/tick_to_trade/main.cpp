@@ -694,7 +694,7 @@ int main(int argc, char **argv) {
   // -- Signal handling --
   // SIGINT/SIGTERM: graceful shutdown (first press = kill switch, second =
   // force) SIGUSR1: explicit kill switch trigger (e.g., from monitoring system)
-  struct sigaction sa {};
+  struct sigaction sa{};
   sa.sa_handler = signal_handler;
   sigemptyset(&sa.sa_mask);
   sigaction(SIGINT, &sa, nullptr);
@@ -748,23 +748,23 @@ int main(int argc, char **argv) {
 
   mk::app::StrategyThread<ActiveStrategy> strategy_thread({
       .md_queue = md_queue,
-      .tcp_sock = tcp_sock,
-      .epoll = strategy_epoll,
       .strategy = strategy,
       .order_mgr = order_mgr,
-      .tracker = *tracker,
+      .tcp_sock = tcp_sock,
+      .epoll = strategy_epoll,
+      .conn = conn,
       .tcp_tx_buf = strat_ctx.tcp_tx,
       .scratch = strat_ctx.scratch,
       .tcp_rx_data = strat_ctx.tcp_rx,
       .tcp_rx_size = strat_ctx.tcp_rx_size,
-      .conn = conn,
-      .exchange_host = exchange_host.c_str(),
-      .exchange_port = exchange_port,
       .stop_flag = g_stop,
       .kill_switch_flag = g_kill_switch,
+      .tracker = *tracker,
+      .log_queue = strat_log_queue,
+      .exchange_host = exchange_host.c_str(),
+      .exchange_port = exchange_port,
       .pin_core = pin_core_strategy,
       .stats_interval_ns = stats_ns,
-      .log_queue = strat_log_queue,
   });
   strategy_thread.start();
 
