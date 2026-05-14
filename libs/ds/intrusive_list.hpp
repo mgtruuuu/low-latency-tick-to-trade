@@ -80,7 +80,7 @@ struct IntrusiveListHook {
 // IntrusiveList<T> — circular doubly-linked list with sentinel
 // =============================================================================
 
-template <class T> class IntrusiveList {
+template <typename T> class IntrusiveList {
   static_assert(std::is_base_of_v<IntrusiveListHook, T>,
                 "T must inherit from IntrusiveListHook");
 
@@ -329,9 +329,11 @@ public:
     /// Implicit conversion: Iterator -> ConstIterator.
     template <bool OtherConst>
       requires(IsConst && !OtherConst)
-    // NOLINTNEXTLINE(google-explicit-constructor)
+
+    // NOLINTBEGIN(google-explicit-constructor)
     IteratorImpl(const IteratorImpl<OtherConst> &other) noexcept
         : hook_(other.hook_) {}
+    // NOLINTEND(google-explicit-constructor)
 
     /// Dereferencing end() is UB — the sentinel is not a T, so
     /// static_cast would be an invalid downcast. Same contract as

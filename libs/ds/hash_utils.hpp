@@ -108,7 +108,8 @@ struct SplitMix64 {
 //
 // On 32-bit platforms size_t is 4 bytes: casting the 64-bit mix64 result back
 // to size_t discards the upper half, defeating the purpose of mixing, so the
-// else branch returns h unchanged. On Linux x86-64 the else branch is dead code.
+// else branch returns h unchanged. On Linux x86-64 the else branch is dead
+// code.
 //
 // Usage:
 //   size_t h = 0;
@@ -159,7 +160,7 @@ constexpr void hash_combine_u64(std::size_t &seed, std::size_t v) noexcept {
 [[nodiscard]] constexpr std::uint64_t
 fnv1a_hash(std::span<const std::byte> data) noexcept {
   constexpr std::uint64_t kFnvOffset = 14695981039346656037ULL;
-  constexpr std::uint64_t kFnvPrime  = 1099511628211ULL;
+  constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 
   std::uint64_t h = kFnvOffset;
   for (const std::byte b : data) {
@@ -179,7 +180,7 @@ fnv1a_hash(std::span<const std::byte> data) noexcept {
 // This ensures good distribution regardless of the underlying std::hash
 // quality, which is critical for power-of-two open-addressing tables.
 
-template <class Key> struct DefaultHash {
+template <typename Key> struct DefaultHash {
   [[nodiscard]] constexpr std::size_t operator()(const Key &k) const noexcept {
     if constexpr (std::is_integral_v<Key>) {
       // Integer types: cast to size_t then finalize. This avoids the identity

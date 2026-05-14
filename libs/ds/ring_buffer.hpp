@@ -49,7 +49,7 @@
 
 namespace mk::ds {
 
-template <class T> class RingBuffer {
+template <typename T> class RingBuffer {
   // ---------------------------------------------------------------------------
   // Compile-time validation (same constraints as FixedRingBuffer)
   // ---------------------------------------------------------------------------
@@ -371,7 +371,8 @@ public:
     IteratorImpl() noexcept = default;
 
     /// Implicit conversion: Iterator → ConstIterator.
-    /// Constraint: only enabled when converting non-const to const (not reverse).
+    /// Constraint: only enabled when converting non-const to const (not
+    /// reverse).
     template <bool OtherConst>
       requires(IsConst && !OtherConst)
     // NOLINTNEXTLINE(google-explicit-constructor)

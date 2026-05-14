@@ -194,7 +194,7 @@ public:
 //
 // Works with Arena. Aborts on OOM (no exceptions — HFT hot path safety).
 
-template <class T> struct ArenaAllocator {
+template <typename T> struct ArenaAllocator {
   using value_type = T;
   using propagate_on_container_copy_assignment = std::false_type;
   using propagate_on_container_move_assignment = std::false_type;
@@ -210,7 +210,7 @@ template <class T> struct ArenaAllocator {
   ArenaAllocator() noexcept = default;
   explicit ArenaAllocator(Arena &ar) noexcept : a(&ar) {}
 
-  template <class U>
+  template <typename U>
   ArenaAllocator(const ArenaAllocator<U> &other) noexcept : a(other.a) {}
 
   [[nodiscard]] T *allocate(std::size_t n) noexcept {
@@ -230,18 +230,18 @@ template <class T> struct ArenaAllocator {
     // no-op: arena frees in bulk
   }
 
-  template <class U> struct rebind { // NOLINT(readability-identifier-naming)
+  template <typename U> struct rebind { // NOLINT(readability-identifier-naming)
     using other = ArenaAllocator<U>;
   };
 
   // Required so different instantiations compare equal if they share the same
   // arena.
-  template <class U>
+  template <typename U>
   bool operator==(const ArenaAllocator<U> &rhs) const noexcept {
     return a == rhs.a;
   }
 
-  template <class U> friend struct ArenaAllocator;
+  template <typename U> friend struct ArenaAllocator;
 };
 
 } // namespace mk::sys::memory

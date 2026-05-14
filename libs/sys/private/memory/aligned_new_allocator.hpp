@@ -19,7 +19,8 @@
 #pragma once
 
 #ifndef MK_SYS_INTERNAL_API
-#error "memory/aligned_new_allocator.hpp is internal. Do not include from public code."
+#error                                                                         \
+    "memory/aligned_new_allocator.hpp is internal. Do not include from public code."
 #endif
 
 #include <cstddef>
@@ -32,7 +33,7 @@ namespace mk::sys::memory {
  * @brief Aligned allocator delegating to global heap.
  * @deprecated C++20: use std::allocator<T> instead.
  */
-template <class T>
+template <typename T>
 struct
 #if __cplusplus >= 202002L
     [[deprecated("C++20: std::allocator handles over-alignment. "
@@ -43,7 +44,7 @@ struct
 
   AlignedNewAllocator() noexcept = default;
 
-  template <class U>
+  template <typename U>
   AlignedNewAllocator(const AlignedNewAllocator<U> & /*unused*/) noexcept {}
 
   /**
@@ -82,7 +83,7 @@ struct
     }
   }
 
-  template <class U>
+  template <typename U>
   bool operator==(const AlignedNewAllocator<U> & /*unused*/) const noexcept {
     return true; // Stateless allocator: all instances are interchangeable
   }

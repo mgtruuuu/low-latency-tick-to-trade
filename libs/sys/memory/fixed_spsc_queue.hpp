@@ -32,7 +32,7 @@
 
 namespace mk::sys::memory {
 
-template <class T, std::size_t CapacityPow2> class FixedSPSCQueue {
+template <typename T, std::size_t CapacityPow2> class FixedSPSCQueue {
   static_assert(CapacityPow2 >= 2, "Capacity must be at least 2");
   static_assert(
       mk::sys::is_power_of_two(static_cast<std::uint32_t>(CapacityPow2)),

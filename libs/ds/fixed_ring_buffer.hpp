@@ -57,7 +57,7 @@
 
 namespace mk::ds {
 
-template <class T, std::size_t CapacityPow2> class FixedRingBuffer {
+template <typename T, std::size_t CapacityPow2> class FixedRingBuffer {
   static_assert(CapacityPow2 >= 2, "Capacity must be at least 2");
   static_assert(
       mk::sys::is_power_of_two(static_cast<std::uint32_t>(CapacityPow2)),
@@ -271,7 +271,8 @@ public:
     IteratorImpl() noexcept = default;
 
     /// Implicit conversion: Iterator → ConstIterator.
-    /// Constraint: only enabled when converting non-const to const (not reverse).
+    /// Constraint: only enabled when converting non-const to const (not
+    /// reverse).
     template <bool OtherConst>
       requires(IsConst && !OtherConst)
     // NOLINTNEXTLINE(google-explicit-constructor)

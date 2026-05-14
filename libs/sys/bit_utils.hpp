@@ -123,7 +123,7 @@ template <typename T>
  *           This is the number of bits needed to represent (n-1),
  *           i.e. the bit-position just above the MSB.
  *
- *   Step 4: 1u << 5 = 32
+ *   Step 4: 1U << 5 = 32
  *           Shift 1 into that position → next power-of-two.
  *
  * Why --n first?
@@ -139,11 +139,11 @@ template <typename T>
   return std::bit_ceil(n);
 #else
   // Guard: __builtin_clz(0) is UB, and n=0 → n-1 wraps to 0xFFFFFFFF
-  // → 1u << 32 is UB. Return 1 to match std::bit_ceil behavior.
+  // → 1U << 32 is UB. Return 1 to match std::bit_ceil behavior.
   if (n <= 1) {
     return 1;
   }
-  return 1u << (32u - static_cast<unsigned>(__builtin_clz(n - 1)));
+  return 1U << (32U - static_cast<unsigned>(__builtin_clz(n - 1)));
 #endif
 }
 

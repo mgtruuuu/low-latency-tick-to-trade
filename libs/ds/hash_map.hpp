@@ -47,8 +47,8 @@
 
 namespace mk::ds {
 
-template <class Key, class Value, class Hash = DefaultHash<Key>,
-          class KeyEqual = std::equal_to<>>
+template <typename Key, typename Value, typename Hash = DefaultHash<Key>,
+          typename KeyEqual = std::equal_to<>>
 class HashMap {
   // ---------------------------------------------------------------------------
   // Compile-time validation (same constraints as FixedHashMap)
@@ -180,7 +180,6 @@ class HashMap {
     return c >= 4 && mk::sys::is_power_of_two(static_cast<std::uint32_t>(c)) &&
            c <= std::numeric_limits<std::uint32_t>::max();
   }
-
 
 public:
   /// Result of an upsert operation. Three-way return distinguishes successful
@@ -478,9 +477,9 @@ public:
   ///
   /// The callback must not mutate the map structure (no insert/erase/upsert).
   /// Mutating the Value through the reference is allowed.
-  template <class Fn>
+  template <typename Fn>
   void for_each(Fn fn) noexcept(noexcept(fn(std::declval<const Key &>(),
-                                             std::declval<Value &>()))) {
+                                            std::declval<Value &>()))) {
     for (std::size_t i = 0; i < capacity_; ++i) {
       if (slots_[i].state == SlotState::kFull) {
         fn(slots_[i].key, slots_[i].value);
@@ -489,7 +488,7 @@ public:
   }
 
   /// Const overload for read-only iteration.
-  template <class Fn>
+  template <typename Fn>
   void for_each(Fn fn) const
       noexcept(noexcept(fn(std::declval<const Key &>(),
                            std::declval<const Value &>()))) {

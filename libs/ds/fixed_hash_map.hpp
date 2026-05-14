@@ -67,8 +67,8 @@ namespace mk::ds {
 // noexcept in libstdc++ (LWG 3828, still open as of C++23). The void
 // specialization uses a conditional noexcept that propagates from the
 // underlying operator==, which is noexcept for all sane key types.
-template <class Key, class Value, std::size_t CapacityPow2,
-          class Hash = DefaultHash<Key>, class KeyEqual = std::equal_to<>>
+template <typename Key, typename Value, std::size_t CapacityPow2,
+          typename Hash = DefaultHash<Key>, typename KeyEqual = std::equal_to<>>
 class FixedHashMap {
   // ---------------------------------------------------------------------------
   // Compile-time validation
@@ -431,9 +431,9 @@ public:
   ///
   /// The callback must not mutate the map structure (no insert/erase/upsert).
   /// Mutating the Value through the reference is allowed.
-  template <class Fn>
+  template <typename Fn>
   void for_each(Fn fn) noexcept(noexcept(fn(std::declval<const Key &>(),
-                                             std::declval<Value &>()))) {
+                                            std::declval<Value &>()))) {
     for (auto &slot : slots_) {
       if (slot.state == SlotState::kFull) {
         fn(slot.key, slot.value);
@@ -442,7 +442,7 @@ public:
   }
 
   /// Const overload for read-only iteration.
-  template <class Fn>
+  template <typename Fn>
   void for_each(Fn fn) const
       noexcept(noexcept(fn(std::declval<const Key &>(),
                            std::declval<const Value &>()))) {

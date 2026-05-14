@@ -50,7 +50,7 @@
 
 namespace mk::sys::memory {
 
-template <class T> class SPSCQueue {
+template <typename T> class SPSCQueue {
   // Only trivially-copyable, trivially-destructible types are safe to
   // memcpy into a raw buffer without construction/destruction.
   static_assert(std::is_trivially_copyable_v<T>,
