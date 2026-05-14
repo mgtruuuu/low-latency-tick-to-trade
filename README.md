@@ -164,9 +164,11 @@ Core pinning flags (`--pin_core_*`) are optional — omit them to run without pi
 
 ## CI
 
-GitHub Actions runs three jobs on pushes to `main` and pull requests targeting `main`:
+GitHub Actions runs five jobs on pushes to `main` and pull requests targeting `main`:
 - **build-and-test**: Debug build + full test suite
 - **asan-ubsan**: AddressSanitizer + UBSan (memory safety)
+- **release-build-and-test**: Release build + tests (`-O3 -march=native` + ThinLTO) — exercises compiler reordering that Debug masks
+- **tsan**: ThreadSanitizer (data-race detection)
 - **clang-tidy**: Zero warnings enforced (`WarningsAsErrors: '*'`)
 
 ## License

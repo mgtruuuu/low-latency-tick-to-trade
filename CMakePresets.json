@@ -12,20 +12,24 @@
     },
     {
       "name": "release",
-      "displayName": "Release (clang++)",
+      "displayName": "Release (clang++, -march=native, LTO)",
       "binaryDir": "${sourceDir}/build-release",
       "cacheVariables": {
         "CMAKE_CXX_COMPILER": "clang++",
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG -march=native -mtune=native",
+        "CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE": "ON"
       }
     },
     {
       "name": "reldbg",
-      "displayName": "RelWithDebInfo (clang++)",
+      "displayName": "RelWithDebInfo (clang++, -march=native, LTO, frame-pointer for perf)",
       "binaryDir": "${sourceDir}/build-reldbg",
       "cacheVariables": {
         "CMAKE_CXX_COMPILER": "clang++",
-        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g -DNDEBUG -march=native -mtune=native -fno-omit-frame-pointer",
+        "CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO": "ON"
       }
     },
     {

@@ -64,7 +64,80 @@ jobs:
         run: ctest --test-dir build-asan --output-on-failure -E "GlobalNewDeleteDeathTest"
 
   # ---------------------------------------------------------------------------
-  # Job 3: clang-tidy — zero warnings enforced (WarningsAsErrors: '*')
+  # Job 3: Release build + tests — exercises Layer 1 (compiler reordering)
+  # ---------------------------------------------------------------------------
+  # Why: dev/Debug uses -O0, which barely reorders. A bug that only surfaces
+  # under -O3 + LTO (e.g. a missing memory_order_acquire) passes dev/asan/tidy
+  # CI cleanly. This job catches it.
+  #
+  # death tests (*DeathTest) are excluded — they verify assert() aborts, which
+  # are no-op in NDEBUG (Release) builds. Same skip pattern is the standard
+  # approach for running ctest on a Release binary.
+  release-build-and-test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang lld
+
+      - name: Cache FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: build-release/_deps
+          key: fetchcontent-release-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: fetchcontent-release-
+
+      - name: Configure (release preset, -march=native + ThinLTO)
+        run: cmake --preset release
+
+      - name: Build
+        run: cmake --build build-release -j$(nproc)
+
+      - name: Test (excluding NDEBUG-incompatible death tests)
+        run: ctest --test-dir build-release --output-on-failure -E "DeathTest"
+
+  # ---------------------------------------------------------------------------
+  # Job 4: ThreadSanitizer — catch data races
+  # ---------------------------------------------------------------------------
+  # Why: enforces the contract behind every atomic load/store/RMW. Catches
+  # missing memory_order, unprotected shared state, lock ordering bugs.
+  #
+  # Excluded tests:
+  #   - LockFreeStack* / IntrusiveLockFreeStack* / ObjectPool stress:
+  #     TSan does not model 128-bit CAS (CMPXCHG16B) correctly and flags
+  #     false positives. The 64-bit CAS variants and unit tests still run.
+  #   - MapPopulateLabTest: environment-dependent (madvise behavior on CI
+  #     runners differs from baremetal).
+  #   - GlobalNewDeleteDeathTest: TSan + Debug + death tests do not mix.
+  tsan:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Cache FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: build-tsan/_deps
+          key: fetchcontent-tsan-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: fetchcontent-tsan-
+
+      - name: Configure (dev-tsan preset)
+        run: cmake --preset dev-tsan
+
+      - name: Build
+        run: cmake --build build-tsan -j$(nproc)
+
+      - name: Test (excluding TSan false positives + env-dependent labs)
+        run: ctest --test-dir build-tsan --output-on-failure -E "LockFreeStackTest\.Stress|IntrusiveLockFreeStackTest\.(Concurrent|Stress)|ObjectPoolTest\.Stress|MapPopulateLabTest|GlobalNewDeleteDeathTest"
+
+  # ---------------------------------------------------------------------------
+  # Job 5: clang-tidy — zero warnings enforced (WarningsAsErrors: '*')
   # ---------------------------------------------------------------------------
   clang-tidy:
     runs-on: ubuntu-24.04
