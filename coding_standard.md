@@ -206,6 +206,16 @@ Language features to prefer by default:
 - `concepts` (`requires` clauses) instead of SFINAE or raw templates for constraints.
 - `noexcept` on move operations and public API boundaries (see §5.5).
 
+Template parameter declaration keyword:
+
+- Use `typename` (not `class`) in template parameter declarations:
+  `template <typename T>` — not `template <class T>`.
+- Rationale: template parameters are not necessarily class types (they can be
+  `int`, function types, pointers, etc.). `typename` accurately reflects this.
+  Also matches the required keyword for dependent names (`typename T::value_type`),
+  giving consistent usage across all template contexts. Follows C++ Core
+  Guidelines T.4.
+
 ### 5.9 STL usage (when to use vs avoid)
 
 Use STL when:
