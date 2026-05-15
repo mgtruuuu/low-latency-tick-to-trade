@@ -6,7 +6,7 @@ Linux x86-64 only. C++20, clang++, zero cross-platform fallbacks.
 
 ## What This Is
 
-1. **Tick-to-Trade Pipeline** (`apps/tick_to_trade/`) -- End-to-end trading system: UDP multicast market data, SPSC queue between threads, strategy evaluation, TCP order entry. Hot-path two-thread architecture plus an async logger thread. RDTSC instrumentation at key stage boundaries (always-on queue-hop, queue-wait, sent-order latency; per-stage breakdown via `PROFILE_STAGES`).
+1. **Tick-to-Trade Pipeline** (`apps/tick_to_trade/`) -- End-to-end trading system: UDP multicast market data, SPSC queue between threads, strategy evaluation, TCP order entry. Hot-path two-thread architecture plus an async logger thread. RDTSC instrumentation at key stage boundaries (always-on queue-wait + sent-order tick-to-trade; per-stage breakdown via `PROFILE_STAGES`).
 
 2. **Multi-Process Simulated Exchange** (`apps/simulated_exchange/`) -- Industry-style exchange with 3 process types: Engine (matching, shared memory queue polling), per-client Gateway (recv/send thread separation), and Market Data Publisher (UDP multicast). Communicates via per-gateway SPSC queue pairs in POSIX shared memory. Supports cross-gateway fills, duplicate order ID detection, typed overload reject, and slot claim via atomic CAS.
 
@@ -16,34 +16,36 @@ Linux x86-64 only. C++20, clang++, zero cross-platform fallbacks.
 
 For system architecture, threading model, wire protocol, risk management, and memory layout, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
-**Measured latency** — Tick-to-Trade: **12 µs p50 / 29 µs p99** (sent orders, two-machine isolated LAN, Release build, Intel Coffee Lake, turbo off, isolated cores):
+**Measured latency** — Tick-to-Trade: **14 µs p50 / 47 µs p99** (sent orders, two-machine isolated LAN, Release build, Intel Coffee Lake, turbo off, isolated cores, zero queue drops, n=338k sent orders):
 
 | Stage | p50 | p99 | Sample population |
 |-------|-----|-----|-------------------|
-| **Tick-to-Trade** | **12 µs** | **29 µs** | sent orders only |
-| Feed Parse | 160 ns | 267 ns | all ticks |
-| Queue Wait | 853 ns | 21 µs | all ticks |
-| Strategy | 107 ns | 213 ns | all ticks |
-| Order Send | 10 µs | 16 µs | sent orders only |
-| Order RTT | 619 µs | 1.2 ms | sent orders only |
+| **Tick-to-Trade** | **14 µs** | **47 µs** | sent orders only |
+| Feed Parse | 107 ns | 213 ns | all ticks |
+| Queue Wait* | 2.6 µs | 32 µs | all ticks |
+| Strategy | 53 ns | 213 ns | all ticks |
+| Order Send | 8.4 µs | 22 µs | sent orders only |
+| Order RTT | 582 µs | 1.1 ms | sent orders only |
 
-Measured with `PROFILE_STAGES` enabled for per-stage attribution. Localhost comparison, measurement methodology, and Queue Hop/Queue Wait semantics in [ARCHITECTURE.md — Measured Results](ARCHITECTURE.md#measured-results).
+\* Queue Wait is a representative single-run value, more sensitive to Strategy hot-loop ordering (drain cadence, `epoll_wait(0)`, order-send blocking) than the order-send path. In two collected runs, Queue Wait p50 moved by a few hundred nanoseconds while Tick-to-Trade and Order Send stayed similar.
+
+Measured with `PROFILE_STAGES` enabled for per-stage attribution. Measurement methodology and Queue Wait semantics in [ARCHITECTURE.md — Measured Results](ARCHITECTURE.md#measured-results).
 
 ## Component Highlights
 
-Median (p50) from rdtsc microbenchmarks (`bench/`, pinned to isolated core, 10k iterations × 3 runs).
+Median (p50) from rdtsc microbenchmarks (`bench/`, Release build, pinned to isolated core, representative run, 10k iterations).
 
 | Component | Description | Median (p50) | p99 |
 |-----------|-------------|-------------|-----|
-| `ObjectPool<T>` | Fixed-size pool, pluggable free-list | 3ns (SingleThread) / 25ns (LockFree) | 5ns / 34ns |
-| `SPSCQueue<T>` | Lock-free SPSC ring buffer, monotonic indices | 3ns push+pop | 6ns |
-| `LockFreeStack<T>` | Treiber stack, 128-bit CAS (CMPXCHG16B), ABA-safe | 48ns push+pop | 55ns |
-| `OrderBook` | Price-time priority, intrusive lists, zero allocation | 47-60ns add_order | 140ns |
-| `MatchingEngine` | Crossing logic on top of OrderBook | 124ns match (5 fills) | 177ns |
-| Pipeline log enqueue | LogEntry construct + SPSC push (hot path only) | 16ns | — |
-| `signal_log()` | Signal-safe, zero-allocation, `write(2)` based | 403ns per call | 543ns |
-| `WireWriter/Reader` | Bounded cursor codec with endian conversion | 3ns (5 fields) | 5ns |
-| `PackedCodec` | Zero-copy memcpy codec for same-arch IPC | 3ns per struct | 5ns |
+| `ObjectPool<T>` | Fixed-size pool, pluggable free-list | 2.5ns (SingleThread alloc) / 25.8ns (LockFree alloc) | 4.2ns / 30.8ns |
+| `SPSCQueue<T>` | Lock-free SPSC ring buffer, monotonic indices | 3.3ns push+pop | 5.0ns |
+| `LockFreeStack<T>` | Treiber stack, 128-bit CAS (CMPXCHG16B), ABA-safe | 47.5ns push+pop | 51.7ns |
+| `OrderBook` | Price-time priority, intrusive lists, zero allocation | 46.7ns add_order (new level) | 110ns |
+| `MatchingEngine` | Crossing logic on top of OrderBook | 110ns submit_order (5 fills) | 156ns |
+| Pipeline log enqueue | `log_market_data` (hot path: LogEntry construct + SPSC push) | 15.8ns | 20ns |
+| `signal_log()` | Signal-safe, zero-allocation, `write(2)` based | 400.8ns per call | 522.5ns |
+| `WireWriter/Reader` | Bounded cursor codec with endian conversion | 1.7ns (5 fields) | 5ns |
+| `PackedCodec` | Zero-copy memcpy codec for same-arch IPC | 1.7ns per struct | 4.2ns |
 
 All nanosecond figures are cache-hot steady-state medians from isolated-core microbenchmarks and should not be interpreted as end-to-end production latency.
 
@@ -82,7 +84,7 @@ bench/                Benchmarks (custom rdtsc + Google Benchmark)
 Hot-path memory comes from `mmap` with explicit huge pages (2MB MAP_HUGETLB) or THP fallback. This greatly reduces TLB misses, enables NUMA binding, and allows prefaulting to remove page faults from the critical path.
 
 **Why SPSC queues instead of lock-free MPSC?**
-The pipeline has exactly one producer and one consumer per queue. SPSC needs only `acquire`/`release` ordering (no CAS), giving ~5ns round-trip vs ~25ns for CAS-based alternatives.
+The pipeline has exactly one producer and one consumer per queue. SPSC needs only `acquire`/`release` ordering (single-digit ns push+pop). MPSC would require CAS that we do not need for this topology.
 
 **Why non-owning data structures?**
 `SPSCQueue<T>`, `HashMap<K,V>`, `RingBuffer<T>`, `IndexFreeStack` -- all take a caller-supplied buffer. This separates data structure logic from memory ownership, allowing the same code to work on huge pages, shared memory, or stack arrays.
@@ -102,7 +104,7 @@ cmake --build build -j$(nproc)
 Other presets:
 
 ```bash
-cmake --preset reldbg         # RelWithDebInfo (benchmarking)
+cmake --preset reldbg         # RelWithDebInfo (perf profiling)
 cmake --preset release        # Release (NDEBUG, guards off)
 cmake --preset dev-asan       # AddressSanitizer + UBSan
 cmake --preset dev-tsan       # ThreadSanitizer
@@ -124,16 +126,18 @@ ctest --test-dir build --output-on-failure
 ## Benchmark
 
 ```bash
-# Build with RelWithDebInfo for benchmarking
-cmake --preset reldbg
-cmake --build build-reldbg -j$(nproc)
+# Release for steady-state numbers (matches measurement in README table)
+cmake --preset release
+cmake --build build-release -j$(nproc)
 
 # Custom rdtsc benchmark (min/median/p99/max)
-taskset -c 2 ./build-reldbg/bench/libs/algo/order_book_bench
+taskset -c 2 ./build-release/bench/libs/algo/order_book_bench
 
 # Google Benchmark (CI-friendly, JSON output)
-./build-reldbg/bench/libs/algo/order_book_gbench --benchmark_format=json
+./build-release/bench/libs/algo/order_book_gbench --benchmark_format=json
 ```
+
+For `perf` profiling (flamegraph, stack unwinding), use `--preset reldbg` instead — optimized build (`-O2 -march=native + ThinLTO`) with debug symbols and frame pointer preserved.
 
 ## Run
 
@@ -148,7 +152,7 @@ The simulated exchange runs as 3 separate processes communicating via POSIX shar
 ./build/apps/simulated_exchange/exchange_gateway \
     --gateway_id=0 --tcp_port=8888 --shm_name=/mk_exchange_events
 
-# Terminal 3: Trading Pipeline (start before MD Publisher for clean warm-up)
+# Terminal 3: Trading Pipeline (joins multicast group before MD Publisher starts)
 ./build/apps/tick_to_trade/tick_to_trade \
     --exchange_host=127.0.0.1 --exchange_port=8888 \
     --mcast_group=239.255.0.1 --mcast_port=9000 \

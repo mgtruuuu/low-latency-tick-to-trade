@@ -129,7 +129,7 @@ responses  │ TCP │ orders                                            │
 ## Data Flow
 
 Instrumented metrics at a glance:
-- **Always-on**: `queue_hop`, `queue_wait`, `tick_to_trade` (sent orders only)
+- **Always-on**: `queue_wait`, `tick_to_trade` (sent orders only); `queue_hop` is recorded as an internal per-item diagnostic
 - **Optional** (`PROFILE_STAGES`): `feed_parse`, `strategy_eval`, `order_send`
 
 A single market data tick traverses up to 7 instrumented rdtsc points. Three are always recorded: `t0` (post-recv), `t_drain` (post-batch-drain), and `td` (per-item processing). `t4` (post-TCP-send) and `tick_to_trade` are recorded only when an order is actually sent. Three more points are added when `PROFILE_STAGES` is enabled: `t1` (post-parse), `t2` (post-strategy), and `t3` (pre-order-send).
@@ -401,88 +401,66 @@ Zero allocation on the hot path is verified by a Debug-mode global `new`/`delete
 
 ### Always-On
 
-Always-on measurement keeps three metrics enabled without rebuild: `queue_hop` (`td - t0`), `queue_wait` (`t_drain - t0`), and sent-order `tick_to_trade` (`t4 - t0`). `queue_wait` measures post-recv to batch drain — the interval data spends in transit (parse, SPSC push, cross-thread scheduling delay, Strategy loop overhead). `queue_hop` adds per-item batch processing accumulation on top of `queue_wait`. This gives continuous visibility into the MD-to-Strategy handoff and outbound order-path latency at lower overhead than full stage profiling.
+Always-on measurement keeps two public metrics enabled without rebuild: `queue_wait` (`t_drain - t0`) and sent-order `tick_to_trade` (`t4 - t0`). `queue_wait` measures post-recv to batch drain — the interval data spends in transit (parse, SPSC push, cross-thread scheduling delay, Strategy loop overhead). A third value, `queue_hop` (`td - t0`), is recorded as an internal per-item diagnostic; it includes batch-position accumulation and is not a SPSC latency measurement. This gives continuous visibility into the MD-to-Strategy handoff and outbound order-path latency at lower overhead than full stage profiling.
 
 ### Compile-Time: Per-Stage Breakdown
 
-Enabled via the `PROFILE_STAGES` CMake option. Adds `feed_parse`, `strategy_eval`, and `order_send` breakdowns. Used for diagnosing which stage causes latency spikes. Zero overhead when disabled. Measured instrumentation overhead: localhost Tick-to-Trade p50 improved from 6.7 µs to 6.5 µs when `PROFILE_STAGES` was disabled (see Key observations below).
+Enabled via the `PROFILE_STAGES` CMake option. Adds `feed_parse`, `strategy_eval`, and `order_send` breakdowns. Used for diagnosing which stage causes latency spikes. Adds extra rdtsc reads per tick — zero overhead when disabled.
 
 | Approach | Overhead | Rebuild needed? | Use case |
 |----------|----------|-----------------|----------|
-| Always-on queue-hop + queue-wait + sent-order tick-to-trade | low | No | Continuous runtime monitoring |
-| Compile-time per-stage | ~0.2 µs (measured) | Yes | Latency diagnosis |
+| Always-on queue-wait + sent-order tick-to-trade | low | No | Continuous runtime monitoring |
+| Compile-time per-stage | extra rdtsc per stage | Yes | Latency diagnosis |
 | Runtime flag (`atomic<bool>`) | ~1ns branch | No | On-demand profiling |
 
 This project uses the first two. The runtime flag approach avoids rebuilds but adds a branch to every tick — acceptable for most systems, avoided by the most latency-sensitive ones.
 
 ### Measured Results
 
-All numbers are steady-state (excluding first 256 warm-up ticks). `PROFILE_STAGES` enabled. Release build (`cmake --preset release`). Multi-process exchange (3 processes). Two-machine numbers are from a representative run.
+All numbers are from a representative two-machine steady-state run (excluding first 256 warm-up ticks). `PROFILE_STAGES` enabled. Release build (`cmake --preset release`). Multi-process exchange (3 processes).
 
 **Test environment:**
-- Trading server: Intel Coffee Lake 8C/16T (2.4 GHz fixed, turbo off), 32 GB, Linux 6.19.7
-- Exchange server: Intel Coffee Lake 6C/12T (2.6 GHz fixed, turbo off), 16 GB, Linux 6.19.8
-- Both: `performance` governor, C-states disabled on isolated cores, `timer_migration=0`, `irqbalance` disabled
-- Trading server: `isolcpus=1-3,9-11`, `nohz_full`, `rcu_nocbs` — MD on core 1, Strategy on core 2, AsyncLogger on core 3
-- Exchange server: `performance` governor, no additional tuning (exchange latency is not measured)
-- Network: Gigabit Ethernet switch, isolated LAN (no internet traffic during measurement)
-- Simulated exchange tick interval: 100 µs (~10k ticks/sec)
+- **Trading server** (`tick_to_trade`): Intel Coffee Lake 8C/16T @ 2.4 GHz (turbo off), 32 GB, Linux 6.19.6, `isolcpus=1-3,9-11`. Pinning: MD on 1, Strategy on 2, AsyncLogger on 3.
+- **Exchange server** (3-process exchange): Intel Coffee Lake 6C/12T @ 2.6 GHz (turbo off), 16 GB, Linux 6.19.6, `isolcpus=1,7`. Pinning: MD Publisher on 1; Engine/Gateway unpinned (latency not measured).
+- **Both servers**: `performance` governor, `nohz_full` + `rcu_nocbs` on all isolated cores, C-states disabled, `timer_migration=0`, `irqbalance` disabled.
+- **Network**: Gigabit Ethernet switch, isolated LAN.
+- **Tick interval**: 100 µs (~10k ticks/sec).
 
-**Localhost** (exchange + pipeline on same machine, Release build) — Tick-to-Trade **6.7 µs p50**:
+**Two-machine** (exchange server → switch → trading server, isolated LAN, representative run with zero queue drops and zero sequence gaps, n=338k sent orders, ~70 s) — Tick-to-Trade **14.3 µs p50**:
 
 | Stage | p50 | p99 | p999 | Sample population |
 |-------|-----|-----|------|-------------------|
-| Feed Parse | 107 ns | 213 ns | 213 ns | all ticks |
-| Queue Wait | 587 ns | 6.8 µs | 13 µs | all ticks |
-| Queue Hop | 640 ns | 6.9 µs | 13.1 µs | all ticks |
-| Strategy | 107 ns | 213 ns | 267 ns | all ticks |
-| Order Send | 5.8 µs | 7.8 µs | 9.9 µs | sent orders only |
-| Order RTT | 222 µs | 347 µs | 580 µs | sent orders only |
-| **Tick-to-Trade** | **6.7 µs** | **12.7 µs** | **19.1 µs** | sent orders only |
+| Feed Parse | 107 ns | 213 ns | 267 ns | all ticks |
+| Queue Wait\* | 2.6 µs | 32 µs | 55 µs | all ticks |
+| Strategy | 53 ns | 213 ns | 267 ns | all ticks |
+| Order Send | 8.4 µs | 22 µs | 55 µs | sent orders only |
+| Order RTT | 582 µs | 1.12 ms | 1.61 ms | sent orders only |
+| **Tick-to-Trade** | **14.3 µs** | **46.7 µs** | **54.6 µs** | sent orders only |
 
-**Two-machine** (exchange server → switch → trading server, isolated LAN, representative run) — Tick-to-Trade **11.8 µs p50**:
+\* Queue Wait is a representative single-run value, more sensitive to Strategy hot-loop scheduling (drain cadence, `epoll_wait(0)` syscall, order-send blocking) than the order-send path. See Interpretation below for run-to-run stability.
 
-| Stage | p50 | p99 | p999 | Sample population |
-|-------|-----|-----|------|-------------------|
-| Feed Parse | 160 ns | 267 ns | 320 ns | all ticks |
-| Queue Wait | 853 ns | 21 µs | 38 µs | all ticks |
-| Queue Hop | 1.0 µs | 22.8 µs | 54.6 µs | all ticks |
-| Strategy | 107 ns | 213 ns | 320 ns | all ticks |
-| Order Send | 10.1 µs | 15.9 µs | 54 µs | sent orders only |
-| Order RTT | 619 µs | 1.19 ms | — | sent orders only |
-| **Tick-to-Trade** | **11.8 µs** | **28.8 µs** | **54.6 µs** | sent orders only |
-
-Order RTT p999 is omitted — values above 4 ms overflow the histogram's last bucket. Raw max can extend far beyond the histogram range due to timeout/cancel lifecycle outliers and is not representative of median-path network RTT.
-
-**Key observations:**
+Order RTT p999 is reported from the current run; raw max can extend far beyond the histogram range due to timeout/cancel lifecycle outliers and is not representative of median-path network RTT.
 
 #### Interpretation
 
-- **Feed Parse and Strategy are network-independent** (~100-300 ns). These measure pure CPU work — parsing a fixed 36-byte datagram and evaluating a spread condition. Consistent across localhost and two-machine setups.
-- **Queue Wait and Queue Hop** both start at `t0` (post-recv, before parse) but end at different points:
+- **Feed Parse and Strategy are pure CPU work** (~100-300 ns) — parsing a fixed 36-byte datagram and evaluating a spread condition. Independent of network I/O by construction (no syscalls, no socket operations on these measured paths).
+- **Queue Wait** starts at `t0` (post-recv, before parse) and ends at `t_drain` (post-batch-drain on the Strategy thread):
 
   ```
   MD Thread:
     recvmmsg()
-    t0 = rdtsc()           ← both metrics start here
+    t0 = rdtsc()            ← Queue Wait starts here
     parse() + spsc.push()
 
   Strategy Thread:
     drain(batch, 64)        ← dequeue up to 64 items
-    t_drain = rdtsc()       ← Queue Wait ends here (once per drain)
-
-    for each item in batch:
-      td = rdtsc()          ← Queue Hop ends here (per item)
-      process(item)         ← strategy eval + possible order send
+    t_drain = rdtsc()       ← Queue Wait ends here
+    process each item
   ```
 
-  **Queue Wait** (`t_drain - t0`): how long data sat in transit — parse, SPSC push, cross-thread scheduling delay, and Strategy loop overhead until `drain()` is called. All items in the same batch share the same `t_drain`, so batch-internal processing time is excluded.
+  **Queue Wait** (`t_drain - t0`) is how long data sat in transit — parse, SPSC push, cross-thread scheduling delay, and Strategy loop overhead until `drain()` is called. All items in the same batch share the same `t_drain`, so batch-internal processing time is excluded. This is not pure SPSC residence time — the component benchmark (~5 ns push+pop) measures that in isolation.
 
-  **Queue Hop** (`td - t0`): Queue Wait plus per-item batch processing accumulation. Later items in a batch include earlier items' processing time in their Queue Hop.
-
-  Neither is pure SPSC residence time — the component benchmark (~5 ns push+pop) measures that in isolation.
-
-  **Why Queue Wait p99 is large** (~21 µs on two-machine): Queue Wait reflects how long it takes the Strategy thread to return to `drain()`. When the previous loop iteration involves order sends, TCP response processing, or timeout handling, the next `drain()` is delayed — and items pushed by the MD thread during that time accumulate longer Queue Wait values:
+  **Why Queue Wait p99 is large** (~32 µs on two-machine): Queue Wait reflects how long it takes the Strategy thread to return to `drain()`. When the previous loop iteration involves order sends, TCP response processing, or timeout handling, the next `drain()` is delayed — and items pushed by the MD thread during that time accumulate longer Queue Wait values:
 
   ```
   MD thread:   push(A)  push(B)  push(C)  push(D)  push(E)
@@ -495,17 +473,18 @@ Order RTT p999 is omitted — values above 4 ms overflow the histogram's last bu
   Queue Wait[E] = t_drain - t0[E] = small (pushed just now)
   ```
 
-  Comparing localhost vs two-machine (Queue Wait p50: 587 ns → 853 ns, Queue Hop p50: 640 ns → 1.0 µs): the increase is consistent with longer Strategy thread loop cycles in the physical network environment (TCP send through NIC vs loopback), though the instrumentation does not isolate the exact cause. Network traversal time itself is not included (`t0` is post-recv).
+  The Strategy thread's loop overhead (TCP `send()`, `epoll_wait(0)` syscalls per iteration, heartbeat/timeout checks) contributes to the drain cadence. Network traversal time itself is not included (`t0` is post-recv).
+
+  Across the two collected runs, Tick-to-Trade and Order Send were similar, while Queue Wait moved by a few hundred nanoseconds at p50. Treat Queue Wait as representative rather than a stable benchmark until more runs are collected.
 
 #### Caveats
 
-- **Sample populations differ across metrics.** Queue Wait/Hop are recorded on **every** market data update (all ticks). Tick-to-Trade is recorded **only** when an order or modify is actually sent. This means Queue Wait/Hop p50 reflects the typical loop cycle time across all ticks, while Tick-to-Trade p50 reflects only the order-sending path. At 100 µs tick interval (~10k ticks/sec) with ~100 orders/sec, Queue Wait/Hop has ~100× more samples than Tick-to-Trade, and most of those samples are from "no order sent" loops which are faster.
+- **Sample populations differ across metrics.** Queue Wait is recorded on **every** market data update (all ticks). Tick-to-Trade is recorded **only** when an order or modify is actually sent. This means Queue Wait p50 reflects the typical loop cycle time across all ticks, while Tick-to-Trade p50 reflects only the order-sending path. At 100 µs tick interval (~10k ticks/sec) with ~100 orders/sec, Queue Wait has ~100× more samples than Tick-to-Trade, and most of those samples are from "no order sent" loops which are faster.
 
-- **Tick interval affects Queue Wait/Hop but not Tick-to-Trade.** At 1000 µs tick interval, Queue Hop p50 rises to ~5 µs while Tick-to-Trade p50 remains ~12 µs. This is because `t0` is stamped after `recvmmsg()` returns to userspace — not when the packet arrives at the kernel. With a dense feed (100 µs), packets accumulate in the kernel socket buffer before `recvmmsg()` drains them in a batch; the kernel queuing time (`s0` to `t0`) is invisible to Queue Wait/Hop. With a sparse feed (1000 µs), packets rarely queue in the kernel, so `t0 ≈ s0` — but the Strategy loop idle time between ticks becomes visible in Queue Wait/Hop instead. With kernel bypass (e.g., OpenOnload), `t0` is stamped at userspace poll time, making it closer to the actual packet handoff regardless of tick rate.
+- **Tick interval changes Queue Wait sample composition more than sent-order Tick-to-Trade.** This is because `t0` is stamped after `recvmmsg()` returns to userspace — not when the packet arrives at the kernel. With a dense feed (e.g., 100 µs), packets accumulate in the kernel socket buffer before `recvmmsg()` drains them in a batch; the kernel queuing time (`s0` to `t0`) is invisible to Queue Wait. With a sparse feed (e.g., 1000 µs), packets rarely queue in the kernel, so `t0 ≈ s0` — but the Strategy loop idle time between ticks becomes visible in Queue Wait instead. Kernel bypass (e.g., OpenOnload) reduces kernel-buffer ambiguity by stamping `t0` at userspace poll time, though polling cadence can still add user-space queueing.
 
 #### Bottlenecks and improvements
 
-- **Order Send dominates Tick-to-Trade on localhost** (~90% of p50). It includes TCP `send()` through the kernel network stack (syscall overhead, socket buffer copy, TCP state machine) — an inherent cost of kernel sockets. On two-machine, Order Send remains the largest single contributor (10.1 µs p50), with Queue Hop adding 1.0 µs.
+- **Order Send and Queue Wait are the largest observed p50 components**: Order Send 8.4 µs (sent-order samples) and Queue Wait 2.6 µs (all-tick samples). Order Send includes TCP `send()` through the kernel network stack (syscall overhead, socket buffer copy, TCP state machine) — an inherent cost of kernel sockets. These percentiles are not strictly additive because their sample populations differ, but they identify the two main areas to investigate. The remaining Tick-to-Trade time likely includes loop overhead such as TCP response polling (`epoll_wait(0)`), heartbeat/timeout checks, per-item rdtsc instrumentation, and batch-position effects.
 - **Potential improvement with kernel bypass**: OpenOnload (Solarflare) via `LD_PRELOAD` replaces the kernel network stack with a userspace implementation. The socket API (`send`, `recv`, `epoll`) remains identical — no code changes required. This is expected to significantly reduce Order Send latency, though the exact improvement depends on hardware and has not been measured in this project.
 - **p999 spikes to ~55 µs** are consistent with occasional queue backpressure and OS jitter (timer interrupts, TLB shootdowns), though the instrumentation does not isolate the exact cause. `idle=poll` (forcing all cores to stay in C0) would likely reduce these spikes but was not used in this test due to thermal constraints of the test hardware.
-- **Instrumentation overhead** (localhost, Release): with `PROFILE_STAGES` disabled (only Tick-to-Trade, Queue Hop, and Queue Wait recorded), localhost sent-order Tick-to-Trade improved from 6.7 µs to 6.5 µs p50 (p99 unchanged at ~12.8 µs). The diagnostic per-stage instrumentation adds approximately 0.2 µs p50 in this setup — small in release builds due to optimized rdtsc inlining.
