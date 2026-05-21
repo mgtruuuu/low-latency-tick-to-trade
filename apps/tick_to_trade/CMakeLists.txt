@@ -9,9 +9,11 @@ target_link_libraries(tick_to_trade PRIVATE
 target_compile_definitions(tick_to_trade PRIVATE _GNU_SOURCE)
 
 # Per-stage latency instrumentation (feed parse, strategy, order send).
-# Always-on: wire-to-wire tick-to-trade measurement (2 RDTSC calls).
-# PROFILE_STAGES adds per-stage breakdown (4 extra RDTSC calls + histogram records,
-# ~50ns overhead per tick). Enable for bottleneck analysis, disable for production.
+# Always-on: Tick-to-Trade (kernel SW RX -> post-send return), TSC inner
+# span, RX kernel paired delta, queue wait — see latency_tracker.hpp.
+# PROFILE_STAGES adds per-stage breakdown (4 extra RDTSC calls + histogram
+# records, ~50ns overhead per tick). Enable for bottleneck analysis,
+# disable for production.
 option(PROFILE_STAGES "Enable per-stage latency instrumentation" ON)
 if(PROFILE_STAGES)
     target_compile_definitions(tick_to_trade PRIVATE PROFILE_STAGES)

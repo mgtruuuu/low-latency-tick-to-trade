@@ -66,8 +66,8 @@ The current strategy logic and TCP order sending are fast enough on a single cor
 **Core pinning:**
 Thread pinning is optional. The MD and Strategy threads can be pinned via `pthread_setaffinity_np()` to isolated cores (`isolcpus`) using `--pin_core_md` and `--pin_core_strategy`. The async logger can also be pinned with `--pin_core_logger`, but it is off the trading critical path. Leaving a pin flag at `-1` disables pinning for that thread.
 
-**Low-jitter deployment:**
-Pinning alone is not sufficient. The deployment also assumes `performance` CPU governor, turbo boost disabled, `isolcpus` + `nohz_full` + `rcu_nocbs` (kernel boot parameters), manual NIC IRQ affinity, disabled C-states on isolated cores, and `timer_migration=0`.
+**Low-jitter deployment (recommended):**
+Pinning alone is not sufficient. A production deployment is expected to also apply `performance` CPU governor, turbo boost disabled, `isolcpus` + `nohz_full` + `rcu_nocbs` (kernel boot parameters), manual NIC IRQ affinity, disabled C-states on isolated cores, and `timer_migration=0`. The measurement run in §Measured Results applies all of the above *except* manual NIC IRQ affinity (left to the kernel/irqbalance default, with irqbalance itself disabled).
 
 **NUMA binding:**
 Memory regions are bound to a NUMA node selected by priority: (1) explicit `--numa_node` override, (2) NIC node from sysfs (`--nic_iface`), (3) strategy core's node, (4) MD core's node, (5) no binding.
@@ -129,27 +129,37 @@ responses  │ TCP │ orders                                            │
 ## Data Flow
 
 Instrumented metrics at a glance:
-- **Always-on**: `queue_wait`, `tick_to_trade` (sent orders only); `queue_hop` is recorded as an internal per-item diagnostic
+- **Always-on**: `tick_to_trade` (kernel-timestamp-based, sent orders only), `queue_wait` (TSC-domain, all ticks); `queue_hop` is recorded as an internal per-item diagnostic
 - **Optional** (`PROFILE_STAGES`): `feed_parse`, `strategy_eval`, `order_send`
 
-A single market data tick traverses up to 7 instrumented rdtsc points. Three are always recorded: `t0` (post-recv), `t_drain` (post-batch-drain), and `td` (per-item processing). `t4` (post-TCP-send) and `tick_to_trade` are recorded only when an order is actually sent. Three more points are added when `PROFILE_STAGES` is enabled: `t1` (post-parse), `t2` (post-strategy), and `t3` (pre-order-send).
+A single market data tick is instrumented at two clock domains:
+- **CLOCK_REALTIME ns-domain**: `t_kernel_rx` (kernel software RX timestamp from `SO_TIMESTAMPNS` cmsg) and `t_post_send_ns` (`clock_gettime(CLOCK_REALTIME)` after `send()` returns) drive the headline Tick-to-Trade. Also: `t_userspace_rx_ns` (`clock_gettime` immediately after `recvmmsg()`) used for the RX-kernel-path paired-delta validation.
+- **TSC cycles**: `t0` (post-`recvmmsg()`), `t_drain` (post-batch-drain), `td` (per-item), `t4` (post-`send()`) drive the stage-breakdown timing and the TSC inner span cross-validation metric. Three more TSC points are added when `PROFILE_STAGES` is enabled: `t1` (post-parse), `t2` (post-strategy), `t3` (pre-order-send).
 
 ```
-UDP datagram arrives
+UDP datagram arrives at NIC
         │
-        ▼
-┌─ MD Feed Thread ──────────────────────────────────┐
-│                                                   │
-│  recvmmsg(fd, batch=64, MSG_DONTWAIT)             │
+        ▼  (NIC driver → kernel RX path: NAPI, sk_buff, socket queue)
+        │
+        ▼  t_kernel_rx ← kernel SW timestamp (SO_TIMESTAMPNS cmsg)
+        │   ↑                                  ↓
+        │   └── RX kernel path (~16 µs paired delta) ──┐
+        │                                              │
+┌─ MD Feed Thread ──────────────────────────────────┐  │
+│                                                   │  │
+│  recvmmsg(fd, batch=64, MSG_DONTWAIT)             │  │
+│  t_userspace_rx_ns = clock_gettime(CLOCK_REALTIME)│◄─┘
 │  t0 = rdtsc()          ← post-recv userspace ts   │
 │                                                   │
-│  FeedHandler::on_udp_data()                       │
-│    ├─ parse 36-byte datagram → MarketDataUpdate   │
-│    ├─ sequence gap detection (per-feed)           │
-│    └─ duplicate filtering                         │
-│  t1 = rdtsc()          ← [PROFILE_STAGES only]    │
-│                                                   │
-│  spsc.try_push(QueuedUpdate{update, t0})          │
+│  for each datagram:                               │
+│    parse SO_TIMESTAMPNS cmsg → t_kernel_rx        │
+│    FeedHandler::on_udp_data()                     │
+│      ├─ parse 36-byte datagram                    │
+│      ├─ sequence gap detection (per-feed)         │
+│      └─ duplicate filtering                       │
+│    t1 = rdtsc()        ← [PROFILE_STAGES only]    │
+│    spsc.try_push(QueuedUpdate{update, t0,         │
+│                              t_kernel_rx})        │
 └───────────────────────┬───────────────────────────┘
                         │
               SPSCQueue<QueuedUpdate>
@@ -169,21 +179,24 @@ UDP datagram arrives
 │  t2 = rdtsc()          ← [PROFILE_STAGES only]    │
 │                                                   │
 │  OrderSendHandler::on_signal()                    │
-│  t3 = rdtsc()          ← [PROFILE_STAGES only]    │
-│    ├─ OrderManager: 7-stage risk check            │
-│    ├─ serialize → scratch buffer                  │
-│    ├─ pack_tcp_message() (header + payload)       │
-│    └─ tcp_sock.send_nonblocking()                 │
-│  t4 = rdtsc()          ← [on order send only]     │
+│  t3 = rdtsc()          ← [PROFILE_STAGES only]    │◄─┐
+│    ├─ OrderManager: 7-stage risk check            │  │ Order Send path
+│    ├─ serialize → scratch buffer                  │  │ (~11.3 µs at p50:
+│    ├─ pack_tcp_message() (header + payload)       │  │  risk + serialize
+│    └─ tcp_sock.send_nonblocking()                 │  │  + TCP send path
+│  t4 = rdtsc()          ← [on order send only]     │◄─┘  / socket queueing)
+│  t_post_send_ns = clock_gettime(CLOCK_REALTIME)   │
 └───────────────────────────────────────────────────┘
 
 Latencies tracked:
-  feed_parse    = t1 - t0      (FeedHandler)              [PROFILE_STAGES]
-  queue_hop     = td - t0      (per-item, includes batch) [always-on]
-  queue_wait    = t_drain - t0 (post-recv to batch drain) [always-on]
-  strategy_eval = t2 - td      (signal generation)        [PROFILE_STAGES]
-  order_send    = t4 - t3      (risk + serialize + TCP)   [PROFILE_STAGES]
-  tick_to_trade = t4 - t0      (end-to-end, sent orders)  [on order send only]
+  feed_parse      = t1 - t0                (FeedHandler)             [PROFILE_STAGES]
+  queue_hop       = td - t0                (per-item, includes batch) [always-on]
+  queue_wait      = t_drain - t0           (post-recv to batch drain) [always-on]
+  strategy_eval   = t2 - td                (signal generation)        [PROFILE_STAGES]
+  order_send      = t4 - t3                (risk + serialize + TCP)   [PROFILE_STAGES]
+  tsc_inner_span  = t4 - t0                (TSC userspace boundary)   [always-on]
+  rx_kernel_path  = t_userspace_rx_ns - t_kernel_rx   (paired delta) [always-on]
+  tick_to_trade   = t_post_send_ns - t_kernel_rx      (HEADLINE)     [on order send only]
 ```
 
 ---
@@ -401,7 +414,14 @@ Zero allocation on the hot path is verified by a Debug-mode global `new`/`delete
 
 ### Always-On
 
-Always-on measurement keeps two public metrics enabled without rebuild: `queue_wait` (`t_drain - t0`) and sent-order `tick_to_trade` (`t4 - t0`). `queue_wait` measures post-recv to batch drain — the interval data spends in transit (parse, SPSC push, cross-thread scheduling delay, Strategy loop overhead). A third value, `queue_hop` (`td - t0`), is recorded as an internal per-item diagnostic; it includes batch-position accumulation and is not a SPSC latency measurement. This gives continuous visibility into the MD-to-Strategy handoff and outbound order-path latency at lower overhead than full stage profiling.
+Always-on measurement keeps four public metrics enabled without rebuild:
+
+- `tick_to_trade` — headline metric: `t_post_send_ns - t_kernel_rx` (CLOCK_REALTIME ns-domain, sent orders only). Spans the kernel SW RX timestamp (`SO_TIMESTAMPNS` cmsg) to the post-`send()` return — closest to the wire-to-wire industry definition reachable without HW-timestamping NICs.
+- `rx_kernel_path` — paired-delta validation: `t_userspace_rx_ns - t_kernel_rx` (same CLOCK_REALTIME ns-domain, all ticks). Directly measures the kernel socket RX/wakeup path that the headline metric captures, with no histogram-subtraction confound.
+- `tsc_inner_span` — TSC-domain cross-validation: `t4 - t0` (rdtsc cycles, sent orders only). Narrower window than the headline (post-`recvmmsg()` → post-`send()`) but useful for stage attribution and as a fallback when `SO_TIMESTAMPNS` is unavailable.
+- `queue_wait` — `t_drain - t0` (rdtsc cycles, all ticks). MD-to-Strategy SPSC handoff latency including parse, push, cross-thread scheduling, and Strategy-loop overhead until `drain()` is called.
+
+A fifth value, `queue_hop` (`td - t0`), is recorded as an internal per-item diagnostic; it includes batch-position accumulation and is not a SPSC latency measurement. This gives continuous visibility across both clock domains at lower overhead than full stage profiling.
 
 ### Compile-Time: Per-Stage Breakdown
 
@@ -409,7 +429,7 @@ Enabled via the `PROFILE_STAGES` CMake option. Adds `feed_parse`, `strategy_eval
 
 | Approach | Overhead | Rebuild needed? | Use case |
 |----------|----------|-----------------|----------|
-| Always-on queue-wait + sent-order tick-to-trade | low | No | Continuous runtime monitoring |
+| Always-on tick-to-trade + rx_kernel_path + tsc_inner_span + queue_wait | low | No | Continuous runtime monitoring |
 | Compile-time per-stage | extra rdtsc per stage | Yes | Latency diagnosis |
 | Runtime flag (`atomic<bool>`) | ~1ns branch | No | On-demand profiling |
 
@@ -426,24 +446,48 @@ All numbers are from a representative two-machine steady-state run (excluding fi
 - **Network**: Gigabit Ethernet switch, isolated LAN.
 - **Tick interval**: 100 µs (~10k ticks/sec).
 
-**Two-machine** (exchange server → switch → trading server, isolated LAN, representative run with zero queue drops and zero sequence gaps, n=338k sent orders, ~70 s) — Tick-to-Trade **14.3 µs p50**:
+**Two-machine** (exchange server → switch → trading server, isolated LAN, representative run with zero queue drops and zero sequence gaps, n=320k sent orders over ~210 s) — Tick-to-Trade **33.0 µs p50**:
 
 | Stage | p50 | p99 | p999 | Sample population |
 |-------|-----|-----|------|-------------------|
 | Feed Parse | 107 ns | 213 ns | 267 ns | all ticks |
-| Queue Wait\* | 2.6 µs | 32 µs | 55 µs | all ticks |
-| Strategy | 53 ns | 213 ns | 267 ns | all ticks |
-| Order Send | 8.4 µs | 22 µs | 55 µs | sent orders only |
-| Order RTT | 582 µs | 1.12 ms | 1.61 ms | sent orders only |
-| **Tick-to-Trade** | **14.3 µs** | **46.7 µs** | **54.6 µs** | sent orders only |
+| RX kernel path\* | 16.1 µs | 33.5 µs | 88.1 µs | all ticks |
+| Queue Wait\*\* | 640 ns | 20.2 µs | 33.4 µs | all ticks |
+| Strategy | 107 ns | 213 ns | 267 ns | all ticks |
+| Order Send path | 11.3 µs | 18.8 µs | 53.0 µs | sent orders only |
+| TSC inner span\*\*\* | 13.5 µs | 35.1 µs | 54.6 µs | sent orders only |
+| Order RTT | 606 µs | 1.17 ms | 4.10 ms | sent orders only |
+| **Tick-to-Trade** | **33.0 µs** | **63.0 µs** | **170.0 µs** | sent orders only |
 
-\* Queue Wait is a representative single-run value, more sensitive to Strategy hot-loop scheduling (drain cadence, `epoll_wait(0)` syscall, order-send blocking) than the order-send path. See Interpretation below for run-to-run stability.
+\* **RX kernel path** is a paired-delta measurement: `clock_gettime(CLOCK_REALTIME)` immediately after `recvmmsg()` minus the `SO_TIMESTAMPNS` cmsg timestamp from the same datagram. Same clock domain, so no domain-conversion drift. This isolates the kernel socket RX/wakeup path directly (NAPI scheduling, sk_buff processing, cross-core wakeup, socket queue dwell) without the percentile-distribution confound of subtracting two unrelated histograms. The ~16 µs result is large compared to typical commodity Linux figures (~2-5 µs), consistent with NIC driver coalescing/wakeup characteristics on this T2 MacBook test rig.
+
+\*\* **Queue Wait** is a representative single-run value, more sensitive to Strategy hot-loop scheduling (drain cadence, `epoll_wait(0)` syscall, order-send blocking) than the order-send path. See Interpretation below for run-to-run stability.
+
+\*\*\* **TSC inner span** is the previous-generation TSC-only metric: post-`recvmmsg()` userspace return → post-`send()` return. Narrower window than Tick-to-Trade — excludes the ~16 µs RX kernel path. Kept as a TSC-domain cross-validation against the kernel-timestamp-based Tick-to-Trade.
 
 Order RTT p999 is reported from the current run; raw max can extend far beyond the histogram range due to timeout/cancel lifecycle outliers and is not representative of median-path network RTT.
 
 #### Interpretation
 
+- **Tick-to-Trade p50 components are consistent with the kernel-bound interpretation.** Components are measured on different sample populations (RX kernel path is all-tick paired delta; Tick-to-Trade and Order Send path are sent-order only), so their p50s are not strictly additive — but the magnitudes line up:
+
+  ```
+  RX kernel path  (t_userspace_rx_ns - t_kernel_rx) : 16.1 µs  (all-tick paired delta)
+  Userspace work  (Feed + Queue Wait + Strategy + per-item) :  ~1 µs
+  Order Send path (risk + serialize + send + check) : 11.3 µs  (PROFILE_STAGES, sent-orders)
+                                                      ───────
+  Approximate sum                                    : ~28.4 µs
+  Tick-to-Trade measured                             :  33.0 µs
+  ```
+
+  The ~4.5 µs residual is not isolated by these stages and likely includes per-item rdtsc instrumentation, two `clock_gettime(CLOCK_REALTIME)` calls (vDSO), and strategy-thread overhead not attributed to any single PROFILE_STAGES stage — for example `epoll_wait(0)` per loop iteration, drain-batch indexing, and the timestamp-store on the dequeue path. The kernel socket stack on RX (~16 µs) and the order-send path that depends on the kernel TCP stack (~11 µs) together account for the bulk of Tick-to-Trade. Note that **Order Send path is not a pure TX kernel measurement** — it also includes risk check, payload serialization, message framing, and post-send result/log handling executed before the timestamp; a strictly TX-kernel-only stage would require dedicated rdtsc points immediately before and after `send_nonblocking()`.
+
+- **Production HFT comparison.** Published wire-to-wire numbers for kernel-bypass HFT systems (e.g., Solarflare OpenOnload + checksum-offload NIC) can reach sub-2 µs. The userspace trading logic in this system already operates at ~1 µs — competitive with that range. The remaining ~32 µs gap is the kernel socket stack on both the RX side (~16 µs) and the order-send path that depends on the kernel TCP stack (~11 µs, though that figure includes risk + serialize cost), not the trading logic. Kernel bypass with a compatible NIC is the canonical mitigation.
+
 - **Feed Parse and Strategy are pure CPU work** (~100-300 ns) — parsing a fixed 36-byte datagram and evaluating a spread condition. Independent of network I/O by construction (no syscalls, no socket operations on these measured paths).
+
+- **RX kernel path is unusually large on this rig (~16 µs).** Commodity Linux + GbE typically sits at 2-5 µs. The 16 µs measurement is consistent with NIC driver coalescing / wakeup-scheduling characteristics of the T2 MacBook running Linux — this is a laptop, not a server NIC. The paired-delta validation (`clock_gettime(CLOCK_REALTIME)` immediately after `recvmmsg()` minus the same-domain `SO_TIMESTAMPNS` cmsg timestamp) confirms the path is real, not a percentile-distribution artifact.
+
 - **Queue Wait** starts at `t0` (post-recv, before parse) and ends at `t_drain` (post-batch-drain on the Strategy thread):
 
   ```
@@ -460,7 +504,7 @@ Order RTT p999 is reported from the current run; raw max can extend far beyond t
 
   **Queue Wait** (`t_drain - t0`) is how long data sat in transit — parse, SPSC push, cross-thread scheduling delay, and Strategy loop overhead until `drain()` is called. All items in the same batch share the same `t_drain`, so batch-internal processing time is excluded. This is not pure SPSC residence time — the component benchmark (~5 ns push+pop) measures that in isolation.
 
-  **Why Queue Wait p99 is large** (~32 µs on two-machine): Queue Wait reflects how long it takes the Strategy thread to return to `drain()`. When the previous loop iteration involves order sends, TCP response processing, or timeout handling, the next `drain()` is delayed — and items pushed by the MD thread during that time accumulate longer Queue Wait values:
+  **Why Queue Wait p99 is large** (~20 µs on two-machine): Queue Wait reflects how long it takes the Strategy thread to return to `drain()`. When the previous loop iteration involves order sends, TCP response processing, or timeout handling, the next `drain()` is delayed — and items pushed by the MD thread during that time accumulate longer Queue Wait values:
 
   ```
   MD thread:   push(A)  push(B)  push(C)  push(D)  push(E)
@@ -473,18 +517,21 @@ Order RTT p999 is reported from the current run; raw max can extend far beyond t
   Queue Wait[E] = t_drain - t0[E] = small (pushed just now)
   ```
 
-  The Strategy thread's loop overhead (TCP `send()`, `epoll_wait(0)` syscalls per iteration, heartbeat/timeout checks) contributes to the drain cadence. Network traversal time itself is not included (`t0` is post-recv).
+  The Strategy thread's loop overhead (TCP `send()`, `epoll_wait(0)` syscalls per iteration, heartbeat/timeout checks) contributes to the drain cadence. Note: Queue Wait measures the TSC `t0` (post-`recvmmsg()` userspace return) to `t_drain` (post-batch-drain on the Strategy thread) span — it does not include the RX kernel path that the headline Tick-to-Trade now captures.
 
-  Across the two collected runs, Tick-to-Trade and Order Send were similar, while Queue Wait moved by a few hundred nanoseconds at p50. Treat Queue Wait as representative rather than a stable benchmark until more runs are collected.
+  Queue Wait is a representative single-run value. The p50 value is small (~1 µs); the more interesting quantity is the p99 tail, which reflects Strategy-loop scheduling jitter under order-send pressure. Treat Queue Wait as a representative diagnostic rather than a stable benchmark until more runs are collected.
 
 #### Caveats
 
-- **Sample populations differ across metrics.** Queue Wait is recorded on **every** market data update (all ticks). Tick-to-Trade is recorded **only** when an order or modify is actually sent. This means Queue Wait p50 reflects the typical loop cycle time across all ticks, while Tick-to-Trade p50 reflects only the order-sending path. At 100 µs tick interval (~10k ticks/sec) with ~100 orders/sec, Queue Wait has ~100× more samples than Tick-to-Trade, and most of those samples are from "no order sent" loops which are faster.
+- **Sample populations differ across metrics.** Queue Wait and RX kernel path are recorded on **every** market data update (all ticks). Tick-to-Trade is recorded **only** when an order or modify is actually sent. At 100 µs tick interval (~10k ticks/sec) with ~100 orders/sec, all-ticks metrics have ~100× more samples than Tick-to-Trade, and most of those samples are from "no order sent" loops which are faster.
 
-- **Tick interval changes Queue Wait sample composition more than sent-order Tick-to-Trade.** This is because `t0` is stamped after `recvmmsg()` returns to userspace — not when the packet arrives at the kernel. With a dense feed (e.g., 100 µs), packets accumulate in the kernel socket buffer before `recvmmsg()` drains them in a batch; the kernel queuing time (`s0` to `t0`) is invisible to Queue Wait. With a sparse feed (e.g., 1000 µs), packets rarely queue in the kernel, so `t0 ≈ s0` — but the Strategy loop idle time between ticks becomes visible in Queue Wait instead. Kernel bypass (e.g., OpenOnload) reduces kernel-buffer ambiguity by stamping `t0` at userspace poll time, though polling cadence can still add user-space queueing.
+- **What's still missing from wire-to-wire.** Tick-to-Trade as measured here is **kernel-software-timestamped**, not hardware wire-to-wire. On the RX side, the `SO_TIMESTAMPNS` cmsg is attached by the kernel during kernel receive processing — the NIC-hardware-ingress-to-kernel-SW-timestamp interval is *not* captured. On the TX side, `t4`/`post_send_ns` is recorded immediately after `send_nonblocking()` returns, which corresponds to socket/TCP send-path enqueue completion (not NIC dispatch or PHY transmission completion); any network propagation/switching delay is unmeasured. True hardware wire-to-wire would require RX/TX HW timestamping NICs (e.g., Solarflare X2522, Mellanox ConnectX), which this rig does not have.
+
+- **Tick interval changes Queue Wait sample composition.** Queue Wait is measured on the TSC side (post-`recvmmsg()` userspace → `t_drain`), so its semantics depend on how packets arrive in userspace. With a dense feed (100 µs), packets accumulate in the kernel socket buffer before `recvmmsg()` drains them in a batch; the kernel queuing time is invisible to Queue Wait (but **is** visible to the new Tick-to-Trade headline, since that starts from the kernel SW RX timestamp). With a sparse feed (1000 µs), packets rarely queue in the kernel, so Queue Wait dominates instead.
 
 #### Bottlenecks and improvements
 
-- **Order Send and Queue Wait are the largest observed p50 components**: Order Send 8.4 µs (sent-order samples) and Queue Wait 2.6 µs (all-tick samples). Order Send includes TCP `send()` through the kernel network stack (syscall overhead, socket buffer copy, TCP state machine) — an inherent cost of kernel sockets. These percentiles are not strictly additive because their sample populations differ, but they identify the two main areas to investigate. The remaining Tick-to-Trade time likely includes loop overhead such as TCP response polling (`epoll_wait(0)`), heartbeat/timeout checks, per-item rdtsc instrumentation, and batch-position effects.
-- **Potential improvement with kernel bypass**: OpenOnload (Solarflare) via `LD_PRELOAD` replaces the kernel network stack with a userspace implementation. The socket API (`send`, `recv`, `epoll`) remains identical — no code changes required. This is expected to significantly reduce Order Send latency, though the exact improvement depends on hardware and has not been measured in this project.
-- **p999 spikes to ~55 µs** are consistent with occasional queue backpressure and OS jitter (timer interrupts, TLB shootdowns), though the instrumentation does not isolate the exact cause. `idle=poll` (forcing all cores to stay in C0) would likely reduce these spikes but was not used in this test due to thermal constraints of the test hardware.
+- **Tick-to-Trade is dominated by kernel network stack on both sides**. RX kernel path is ~16.1 µs (all-tick paired delta); Order Send path is ~11.3 µs (sent-order, includes risk check + serialize + `send_nonblocking()`). The pure kernel TX stack inside `send_nonblocking()` likely accounts for much of the Order Send path but is not directly isolated — risk and serialize add some overhead. Together they are the dominant cost; userspace trading logic itself (Feed Parse + Queue Wait + Strategy + per-item overhead) is ~1 µs, competitive with kernel-bypass HFT systems' userspace processing time.
+- **Largest improvement: kernel bypass on RX side**. OpenOnload (Solarflare) or VMA (Mellanox) via `LD_PRELOAD` replaces the kernel network stack with a userspace implementation. Socket API (`send`, `recv`, `epoll`) remains identical — no code changes required. This is designed to reduce the ~16 µs RX kernel path and the kernel TX cost inside `send_nonblocking()`, and Tick-to-Trade could move toward the userspace-plus-risk-plus-serialize floor (a few µs) plus the unmeasured NIC PHY time. Requires a compatible NIC (Solarflare X2522, Mellanox ConnectX) which this T2 MacBook test rig does not have.
+- **RX kernel path tail (p999 ~88 µs)** indicates occasional large delays in NAPI scheduling or wakeup delivery, likely from background interrupts on the non-isolated core that handles NIC IRQs. Manual NIC IRQ affinity to a known non-isolated core (currently irqbalance is off but IRQ affinity is not pinned) is the next investigation step.
+- **TSC inner span p999 ~55 µs** for the narrower userspace-boundary metric is consistent with occasional Strategy-loop scheduling jitter under order-send pressure (TCP response handling, timeout cancellation). `idle=poll` would likely reduce these spikes but was not used in this test due to thermal constraints of the test hardware.

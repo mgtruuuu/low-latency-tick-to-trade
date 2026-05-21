@@ -49,9 +49,9 @@ static_assert(all_same_width(kThreadNames), "kThreadNames: width mismatch");
 static_assert(all_same_width(kLevelNames), "kLevelNames: width mismatch");
 static_assert(all_same_width(kEventTypeNames),
               "kEventTypeNames: width mismatch");
-constexpr std::string_view kLatencyStageNames[] = {"UdpRecv"sv,   "FeedParse"sv,
-                                                   "QueueHop"sv,  "Strategy"sv,
-                                                   "OrderSend"sv, "T2T"sv};
+constexpr std::string_view kLatencyStageNames[] = {
+    "UdpRecv"sv,   "FeedParse"sv, "QueueHop"sv, "Strategy"sv,
+    "OrderSend"sv, "T2T"sv,       "KernelT2T"sv};
 constexpr std::string_view kOrderEventNames[] = {
     "NewOrder"sv,   "OrderAck"sv,    "OrderReject"sv,  "Fill"sv,
     "CancelSent"sv, "CancelAck"sv,   "CancelReject"sv, "ModifySent"sv,

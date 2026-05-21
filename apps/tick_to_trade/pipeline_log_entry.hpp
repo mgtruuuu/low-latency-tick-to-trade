@@ -44,6 +44,12 @@ enum class LatencyStage : std::uint8_t {
   kStrategy = 3,
   kOrderSend = 4,
   kTickToTrade = 5,
+  /// Kernel SW RX timestamp (SO_TIMESTAMPNS cmsg) → post-send-return.
+  /// This is the public-facing Tick-to-Trade headline metric (kernel-
+  /// software-timestamped; not hardware wire-to-wire). The older
+  /// kTickToTrade above is now reported as the "TSC inner span" cross-
+  /// validation metric. CLOCK_REALTIME ns-domain (not TSC cycles).
+  kKernelTickToTrade = 6,
 };
 
 /// Order event sub-type for kOrder entries.
@@ -79,10 +85,10 @@ enum class ConnectionEvent : std::uint8_t {
 struct LogEntry {
   // -- Header (16 bytes) --
   std::uint64_t tsc_timestamp{0}; // rdtsc() at log site
-  std::uint16_t thread_id{0};    // Logical thread ID (see kThreadId* below)
+  std::uint16_t thread_id{0};     // Logical thread ID (see kThreadId* below)
   LogLevel level{LogLevel::kInfo};
   LogEventType event_type{LogEventType::kText}; // Union discriminator
-  std::uint8_t pad_[4]{};        // Align payload to 16-byte boundary
+  std::uint8_t pad_[4]{}; // Align payload to 16-byte boundary
 
   // -- Payload (112 bytes) — tagged union --
   // C++ rule: a union may have at most ONE member with a default member
@@ -101,7 +107,7 @@ struct LogEntry {
     // kOrder: order lifecycle event
     struct {
       OrderEvent sub_type;
-      std::uint8_t side;           // 0=Bid, 1=Ask
+      std::uint8_t side; // 0=Bid, 1=Ask
       std::uint8_t reserved[2];
       std::uint32_t symbol_id;
       std::uint64_t client_order_id;
@@ -110,31 +116,31 @@ struct LogEntry {
       std::uint32_t qty;
       std::uint32_t remaining_qty;
       std::int64_t send_ts; // monotonic_nanos at order send
-    } order; // 48 bytes used
+    } order;                // 48 bytes used
 
     // kMarketData: market data event
     struct {
       std::uint64_t seq_num;
       std::uint32_t symbol_id;
-      std::uint8_t side;           // 0=Bid, 1=Ask
+      std::uint8_t side; // 0=Bid, 1=Ask
       std::uint8_t reserved[3];
       std::int64_t price;
       std::uint32_t qty;
       std::uint32_t gap_size; // Non-zero if gap detected
-    } market_data; // 32 bytes used
+    } market_data;            // 32 bytes used
 
     // kConnection: TCP connection lifecycle
     struct {
       ConnectionEvent sub_type;
       std::uint8_t reserved[3];
-      std::uint32_t attempt;  // Reconnect attempt number
-      std::int64_t rtt_ns;    // Heartbeat RTT in nanoseconds
-    } connection; // 16 bytes used
+      std::uint32_t attempt; // Reconnect attempt number
+      std::int64_t rtt_ns;   // Heartbeat RTT in nanoseconds
+    } connection;            // 16 bytes used
 
     // kText: generic text message (cold-path diagnostic)
     struct {
       char msg[112]; // Null-terminated, truncated at 111 chars
-    } text; // 112 bytes used
+    } text;          // 112 bytes used
   };
 };
 

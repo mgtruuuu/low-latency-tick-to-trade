@@ -32,11 +32,12 @@
 #include "sys/thread/affinity.hpp"
 #include "sys/thread/hot_path_control.hpp"
 
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
 #include <sys/socket.h>
 #include <thread>
 
@@ -128,20 +129,57 @@ private:
           if (rc <= 0) {
             break;
           }
+          // Capture userspace-after-recvmmsg-return time for the paired-delta
+          // validation against kernel SW RX timestamps. Same CLOCK_REALTIME
+          // domain as SCM_TIMESTAMPNS cmsg → direct subtraction gives the
+          // kernel socket RX/wakeup path latency.
+          struct timespec userspace_recv_ts{};
+          clock_gettime(CLOCK_REALTIME, &userspace_recv_ts);
+          const std::int64_t userspace_recv_ns =
+              (static_cast<std::int64_t>(userspace_recv_ts.tv_sec) *
+               1'000'000'000LL) +
+              userspace_recv_ts.tv_nsec;
           src->stats.packets += static_cast<std::uint64_t>(rc);
           for (int m = 0; m < rc; ++m) {
             src->stats.bytes += msgvec[m].msg_len;
           }
           for (int m = 0; m < rc; ++m) {
-            // Userspace rdtsc after recvmmsg — measures from parse start, not
-            // kernel packet arrival. For true recv timestamps, use
-            // SO_TIMESTAMPNS (kernel SW, ~tens of ns accuracy) or
-            // SO_TIMESTAMPING with SOF_TIMESTAMPING_RX_HARDWARE (NIC HW,
-            // ~single-digit ns, requires Solarflare/Mellanox class NICs).
-            // Current placement is a practical trade-off: per-datagram rdtsc
-            // inside the batch loop, since recvmmsg returns multiple datagrams
-            // but we need one timestamp each.
+            // Userspace rdtsc after recvmmsg — drives the TSC inner span
+            // metric (post-recvmmsg → post-send-return), kept as a TSC-only
+            // cross-validation alongside the kernel-timestamp-based Tick-
+            // to-Trade headline.
             auto t0 = sys::rdtsc();
+
+            // Extract kernel SW RX timestamp from SO_TIMESTAMPNS cmsg —
+            // drives the headline Tick-to-Trade metric (kernel SW RX →
+            // post-send-return, CLOCK_REALTIME ns-domain). Best-effort: if
+            // MSG_CTRUNC is set or SCM_TIMESTAMPNS cmsg is absent,
+            // kernel_recv_ns stays 0 and the kernel-RX metrics are skipped
+            // for this datagram (TSC inner span is unaffected).
+            std::int64_t kernel_recv_ns = 0;
+            auto &hdr = msgvec[m].msg_hdr;
+            if ((hdr.msg_flags & MSG_CTRUNC) == 0) [[likely]] {
+              for (cmsghdr *c = CMSG_FIRSTHDR(&hdr); c != nullptr;
+                   c = CMSG_NXTHDR(&hdr, c)) {
+                if (c->cmsg_level == SOL_SOCKET &&
+                    c->cmsg_type == SCM_TIMESTAMPNS) {
+                  struct timespec ts{};
+                  std::memcpy(&ts, CMSG_DATA(c), sizeof(ts));
+                  kernel_recv_ns =
+                      (static_cast<std::int64_t>(ts.tv_sec) * 1'000'000'000LL) +
+                      ts.tv_nsec;
+                  break;
+                }
+              }
+            }
+            // Restore msg_controllen for the next recvmmsg() call — the
+            // kernel overwrites it with the actual cmsg length on return.
+            hdr.msg_controllen = kCmsgBufSize;
+
+            // Paired-delta validation: directly record kernel SW RX → userspace
+            // post-recvmmsg-return gap. Skipped if SCM_TIMESTAMPNS cmsg was
+            // absent for this datagram.
+            tracker_.record_rx_kernel_gap(kernel_recv_ns, userspace_recv_ns);
 
             const auto *buf = static_cast<const char *>(iovecs[m].iov_base);
             const auto len = static_cast<std::size_t>(msgvec[m].msg_len);
@@ -152,9 +190,8 @@ private:
 #ifdef PROFILE_STAGES
             auto t1 = sys::rdtsc();
             tracker_.record_feed_parse(t1 - t0);
-            (void)log_latency(
-                log_queue_, kThreadIdMd,
-                LatencyStage::kFeedParse, t1 - t0, t0);
+            (void)log_latency(log_queue_, kThreadIdMd, LatencyStage::kFeedParse,
+                              t1 - t0, t0);
 #else
             (void)tracker_;
 #endif
@@ -170,7 +207,9 @@ private:
 
             // Push to Strategy thread via SPSC queue.
             // If queue is full, drop the update (back-pressure signal).
-            const QueuedUpdate queued{.update = update, .recv_tsc = t0};
+            const QueuedUpdate queued{.update = update,
+                                      .recv_tsc = t0,
+                                      .kernel_recv_ns = kernel_recv_ns};
             if (!md_queue_.try_push(queued)) [[unlikely]] {
               // Queue full — Strategy thread is falling behind.
               // Drop is acceptable: FeedHandler tracks gaps, and the
@@ -179,11 +218,10 @@ private:
             }
 
             // Log market data to async logger (binary push, ~5-10ns).
-            (void)log_market_data(
-                log_queue_, kThreadIdMd, LogLevel::kInfo,
-                update.seq_num, update.symbol_id,
-                static_cast<std::uint8_t>(update.side), update.price,
-                update.qty);
+            (void)log_market_data(log_queue_, kThreadIdMd, LogLevel::kInfo,
+                                  update.seq_num, update.symbol_id,
+                                  static_cast<std::uint8_t>(update.side),
+                                  update.price, update.qty);
           }
         }
       }

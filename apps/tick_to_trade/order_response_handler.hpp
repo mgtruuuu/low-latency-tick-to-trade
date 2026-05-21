@@ -29,6 +29,7 @@
 #include "sys/log/signal_logger.hpp"
 #include "sys/nano_clock.hpp"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 
@@ -71,6 +72,17 @@ public:
       if (deserialize_order_reject(msg.payload, rej)) {
         order_mgr.on_order_reject(rej);
         ++consecutive_rejects_;
+        const auto reason_idx = static_cast<std::size_t>(rej.reason);
+        if (reason_idx < kNumRejectReasons) {
+          reject_by_reason_[reason_idx].fetch_add(
+              1, std::memory_order_relaxed);
+        }
+        // Diagnostic: surface exchange reject reasons immediately so that
+        // consecutive-reject-triggered kill switches can be root-caused.
+        sys::log::signal_log(
+            "[REJECT] OrderReject client_order_id=", rej.client_order_id,
+            " reason=", reason_idx,
+            " consecutive=", consecutive_rejects_, '\n');
         (void)log_order(
             log_queue, kThreadIdStrategy, LogLevel::kWarn,
             OrderEvent::kOrderReject, 0, 0, 0, 0,
@@ -179,6 +191,20 @@ public:
     return unknown_types_.load(std::memory_order_relaxed);
   }
 
+  // -- Reject reason diagnostics --
+
+  /// Number of distinct RejectReason enum values (kUnknown=0..kThrottled=8).
+  static constexpr std::size_t kNumRejectReasons = 9;
+
+  [[nodiscard]] std::uint64_t reject_count_for(RejectReason reason) const
+      noexcept {
+    const auto idx = static_cast<std::size_t>(reason);
+    if (idx >= kNumRejectReasons) {
+      return 0;
+    }
+    return reject_by_reason_[idx].load(std::memory_order_relaxed);
+  }
+
 private:
   static constexpr std::uint32_t kMaxConsecutiveRejects = 5;
 
@@ -187,6 +213,12 @@ private:
   // Diagnostic counters — std::atomic for cross-thread monitoring safety.
   std::atomic<std::uint64_t> parse_errors_{0};
   std::atomic<std::uint64_t> unknown_types_{0};
+
+  // Per-reason exchange OrderReject counters — diagnostics for the kill
+  // switch path (consecutive_rejects >= 5 → kill switch). Indexed by the
+  // RejectReason enum value; out-of-range values are dropped silently.
+  std::array<std::atomic<std::uint64_t>, kNumRejectReasons>
+      reject_by_reason_{};
 };
 
 } // namespace mk::app

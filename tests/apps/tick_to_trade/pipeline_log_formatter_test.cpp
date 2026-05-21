@@ -241,11 +241,14 @@ TEST(PipelineLogFormatterTest, TextEntry) {
 
 TEST(PipelineLogFormatterTest, AllLatencyStages) {
   constexpr std::array kExpected = {"UdpRecv",  "FeedParse", "QueueHop",
-                                    "Strategy", "OrderSend", "T2T"};
-  static_assert(kExpected.size() ==
-                    static_cast<std::size_t>(LatencyStage::kTickToTrade) + 1,
-                "kExpected size must match LatencyStage enum count");
-  for (int i = 0; i <= static_cast<int>(LatencyStage::kTickToTrade); ++i) {
+                                    "Strategy", "OrderSend", "T2T",
+                                    "KernelT2T"};
+  static_assert(
+      kExpected.size() ==
+          static_cast<std::size_t>(LatencyStage::kKernelTickToTrade) + 1,
+      "kExpected size must match LatencyStage enum count");
+  for (int i = 0; i <= static_cast<int>(LatencyStage::kKernelTickToTrade);
+       ++i) {
     LogEntry entry{};
     entry.tsc_timestamp = 1000;
     entry.thread_id = kThreadIdMd;

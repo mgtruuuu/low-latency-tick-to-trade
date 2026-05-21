@@ -8,9 +8,10 @@
  * at construction time by make_md_ctx().
  *
  * Layout (single contiguous region):
- *   [mmsg_bufs: batch_size * buf_size]       — UDP recv datagram slots
- *   [iovecs:    batch_size * sizeof(iovec)]   — recvmmsg scatter-gather
- *   [msgvec:    batch_size * sizeof(mmsghdr)] — recvmmsg message headers
+ *   [mmsg_bufs: batch_size * buf_size]             — UDP recv datagram slots
+ *   [iovecs:    batch_size * sizeof(iovec)]        — recvmmsg scatter-gather
+ *   [msgvec:    batch_size * sizeof(mmsghdr)]      — recvmmsg message headers
+ *   [cmsg_bufs: batch_size * kCmsgBufSize]         — SO_TIMESTAMPNS cmsg slots
  */
 
 #pragma once
@@ -19,9 +20,14 @@
 
 #include <cstddef>
 #include <cstring>
+#include <ctime>
 #include <sys/socket.h>
 
 namespace mk::app {
+
+/// Per-mmsghdr ancillary data buffer size for SO_TIMESTAMPNS cmsg.
+/// Sized to hold one SCM_TIMESTAMPNS (struct timespec) cmsg with padding.
+inline constexpr std::size_t kCmsgBufSize = CMSG_SPACE(sizeof(struct timespec));
 
 /// Non-owning typed views into a contiguous recvmmsg() buffer region.
 /// Caller is responsible for allocation, NUMA binding, and lifetime.
@@ -29,6 +35,7 @@ struct MdCtx {
   char *mmsg_bufs;
   struct iovec *iovecs;
   struct mmsghdr *msgvec;
+  char *cmsg_bufs; // SO_TIMESTAMPNS ancillary data, batch_size * kCmsgBufSize
   unsigned int batch_size;
   std::size_t buf_size;
 };
@@ -45,6 +52,10 @@ md_ctx_buf_size(unsigned int batch_size, std::size_t buf_size) noexcept {
 
   offset = sys::align_up(offset, alignof(struct mmsghdr));
   offset += batch_size * sizeof(struct mmsghdr);
+
+  // cmsg buffers (one per mmsghdr) for SO_TIMESTAMPNS.
+  offset = sys::align_up(offset, alignof(struct cmsghdr));
+  offset += batch_size * kCmsgBufSize;
 
   return offset;
 }
@@ -71,22 +82,31 @@ md_ctx_buf_size(unsigned int batch_size, std::size_t buf_size) noexcept {
 
   offset = sys::align_up(offset, alignof(struct mmsghdr));
   auto *msgs = reinterpret_cast<struct mmsghdr *>(raw + offset);
+  offset += batch_size * sizeof(struct mmsghdr);
+
+  offset = sys::align_up(offset, alignof(struct cmsghdr));
+  auto *cmsgs = reinterpret_cast<char *>(raw + offset);
 
   // Zero mmsghdr array before wiring linkage.
   std::memset(msgs, 0, batch_size * sizeof(struct mmsghdr));
 
-  // Wire iovec/mmsghdr pointer chain (cold path, done once).
+  // Wire iovec/mmsghdr pointer chain + per-mmsghdr cmsg buffer (cold path,
+  // done once). msg_controllen is reset before each recvmmsg() call in the
+  // hot loop because the kernel overwrites it with the actual cmsg length.
   for (unsigned int j = 0; j < batch_size; ++j) {
     iovs[j].iov_base = bufs + (j * buf_size);
     iovs[j].iov_len = buf_size;
     msgs[j].msg_hdr.msg_iov = &iovs[j];
     msgs[j].msg_hdr.msg_iovlen = 1;
+    msgs[j].msg_hdr.msg_control = cmsgs + (j * kCmsgBufSize);
+    msgs[j].msg_hdr.msg_controllen = kCmsgBufSize;
   }
 
   return {
       .mmsg_bufs = bufs,
       .iovecs = iovs,
       .msgvec = msgs,
+      .cmsg_bufs = cmsgs,
       .batch_size = batch_size,
       .buf_size = buf_size,
   };

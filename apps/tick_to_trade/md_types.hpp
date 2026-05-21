@@ -20,11 +20,16 @@ namespace mk::app {
 // -- SPSC queue element --
 
 /// Carries a parsed MarketDataUpdate from the MD thread to the Strategy
-/// thread, along with the rdtsc timestamp captured at UDP recv time.
-/// 48 bytes — fits in one cache line.
+/// thread, along with two recv-time timestamps:
+///   - recv_tsc:        TSC at recvmmsg() return (TSC-domain Tick-to-Trade).
+///   - kernel_recv_ns:  CLOCK_REALTIME ns from SO_TIMESTAMPNS cmsg (kernel
+///                      ingress; closer to wire-to-wire). 0 if cmsg missing
+///                      or SO_TIMESTAMPNS disabled — caller should skip the
+///                      kernel-RX metric for that datagram.
 struct QueuedUpdate {
   MarketDataUpdate update;
-  std::uint64_t recv_tsc{0}; // rdtsc() at recvmmsg time on MD thread
+  std::uint64_t recv_tsc{0};      // rdtsc() at recvmmsg time on MD thread
+  std::int64_t kernel_recv_ns{0}; // CLOCK_REALTIME ns at kernel packet ingress
 };
 
 /// SPSC queue type for MD -> Strategy thread communication.

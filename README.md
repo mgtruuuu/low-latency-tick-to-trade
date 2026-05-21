@@ -6,7 +6,7 @@ Linux x86-64 only. C++20, clang++, zero cross-platform fallbacks.
 
 ## What This Is
 
-1. **Tick-to-Trade Pipeline** (`apps/tick_to_trade/`) -- End-to-end trading system: UDP multicast market data, SPSC queue between threads, strategy evaluation, TCP order entry. Hot-path two-thread architecture plus an async logger thread. RDTSC instrumentation at key stage boundaries (always-on queue-wait + sent-order tick-to-trade; per-stage breakdown via `PROFILE_STAGES`).
+1. **Tick-to-Trade Pipeline** (`apps/tick_to_trade/`) -- End-to-end trading system: UDP multicast market data, SPSC queue between threads, strategy evaluation, TCP order entry. Hot-path two-thread architecture plus an async logger thread. Tick-to-Trade latency is measured from the kernel software RX timestamp (`SO_TIMESTAMPNS`) to the post-send return, approximating the wire-to-wire industry definition without requiring HW-timestamping NICs. Per-stage breakdown via `PROFILE_STAGES`.
 
 2. **Multi-Process Simulated Exchange** (`apps/simulated_exchange/`) -- Industry-style exchange with 3 process types: Engine (matching, shared memory queue polling), per-client Gateway (recv/send thread separation), and Market Data Publisher (UDP multicast). Communicates via per-gateway SPSC queue pairs in POSIX shared memory. Supports cross-gateway fills, duplicate order ID detection, typed overload reject, and slot claim via atomic CAS.
 
@@ -16,20 +16,28 @@ Linux x86-64 only. C++20, clang++, zero cross-platform fallbacks.
 
 For system architecture, threading model, wire protocol, risk management, and memory layout, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
-**Measured latency** — Tick-to-Trade: **14 µs p50 / 47 µs p99** (sent orders, two-machine isolated LAN, Release build, Intel Coffee Lake, turbo off, isolated cores, zero queue drops, n=338k sent orders):
+**Measured latency** — Tick-to-Trade: **33 µs p50 / 63 µs p99** (sent orders, two-machine isolated LAN, Release build, Intel Coffee Lake, turbo off, isolated cores, zero queue drops, n=320k sent orders over ~210 s):
 
 | Stage | p50 | p99 | Sample population |
 |-------|-----|-----|-------------------|
-| **Tick-to-Trade** | **14 µs** | **47 µs** | sent orders only |
+| **Tick-to-Trade**\* | **33 µs** | **63 µs** | sent orders only |
+| RX kernel path\*\* | 16 µs | 34 µs | all ticks |
 | Feed Parse | 107 ns | 213 ns | all ticks |
-| Queue Wait* | 2.6 µs | 32 µs | all ticks |
-| Strategy | 53 ns | 213 ns | all ticks |
-| Order Send | 8.4 µs | 22 µs | sent orders only |
-| Order RTT | 582 µs | 1.1 ms | sent orders only |
+| Queue Wait | 640 ns | 20 µs | all ticks |
+| Strategy | 107 ns | 213 ns | all ticks |
+| Order Send path | 11 µs | 19 µs | sent orders only |
+| TSC inner span\*\*\* | 13 µs | 35 µs | sent orders only |
+| Order RTT | 606 µs | 1.17 ms | sent orders only |
 
-\* Queue Wait is a representative single-run value, more sensitive to Strategy hot-loop ordering (drain cadence, `epoll_wait(0)`, order-send blocking) than the order-send path. In two collected runs, Queue Wait p50 moved by a few hundred nanoseconds while Tick-to-Trade and Order Send stayed similar.
+\* **Tick-to-Trade** is measured from the kernel software RX timestamp (`SO_TIMESTAMPNS` cmsg, attached by the kernel during kernel receive processing) to the post-`send_nonblocking()` return. This is not true hardware wire-to-wire: NIC hardware-ingress-to-kernel-SW-timestamp and post-`send` NIC TX PHY transmission time are both excluded — full wire-to-wire would require HW RX/TX timestamping NICs (e.g., Solarflare X2522, Mellanox ConnectX).
 
-Measured with `PROFILE_STAGES` enabled for per-stage attribution. Measurement methodology and Queue Wait semantics in [ARCHITECTURE.md — Measured Results](ARCHITECTURE.md#measured-results).
+\*\* **RX kernel path** is a paired-delta measurement (kernel SW timestamp → userspace `recvmmsg()` return, same CLOCK_REALTIME ns-domain). On this T2 MacBook test rig + commodity GbE, the kernel socket RX/wakeup path is ~16 µs — larger than typical commodity Linux figures (~2–5 µs), consistent with NAPI/interrupt-coalescing characteristics of the NIC driver. Kernel bypass (e.g., OpenOnload) is the standard mitigation.
+
+\*\*\* **TSC inner span** is the older TSC-only metric: post-`recvmmsg()` userspace → post-`send()` return. Narrower window than Tick-to-Trade (excludes the ~16 µs kernel RX path). Useful as a TSC-domain cross-validation against the kernel-timestamp-based Tick-to-Trade.
+
+Note: **Order Send path** (`PROFILE_STAGES`) is `t3..t4` — risk check + check-modify decision + payload serialize + TCP `pack_message` + `send_nonblocking()` return. It is *not* a pure TX kernel measurement; a dedicated send-only stage would require additional rdtsc points immediately before/after `send_nonblocking()`.
+
+Measured with `PROFILE_STAGES` enabled for per-stage attribution. Measurement methodology, paired-delta validation, and per-stage decomposition in [ARCHITECTURE.md — Measured Results](ARCHITECTURE.md#measured-results).
 
 ## Component Highlights
 

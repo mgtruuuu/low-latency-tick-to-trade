@@ -115,6 +115,40 @@ public:
   }
 
   // ---------------------------------------------------------------------------
+  // Kernel SW RX timestamp → post-send-return (CLOCK_REALTIME ns-domain)
+  // ---------------------------------------------------------------------------
+
+  /// Record kernel-RX → post-send-return latency in nanoseconds.
+  /// Secondary metric covering the kernel RX path that is invisible to the
+  /// TSC-domain Tick-to-Trade (rdtsc is captured after recvmmsg() returns).
+  /// kernel_recv_ns == 0 means SCM_TIMESTAMPNS cmsg was absent for that
+  /// datagram — skip the sample silently (TSC metric is unaffected).
+  void record_kernel_tick_to_trade(std::int64_t kernel_recv_ns,
+                                   std::int64_t post_send_ns) noexcept {
+    if (kernel_recv_ns > 0 && post_send_ns > kernel_recv_ns) {
+      const auto ns = static_cast<std::uint64_t>(post_send_ns - kernel_recv_ns);
+      kernel_tick_to_trade_.record(ns);
+      total_kernel_ticks_.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  /// Record the paired-delta validation: kernel SW RX timestamp → userspace
+  /// post-recvmmsg-return timestamp (both CLOCK_REALTIME ns). This isolates
+  /// the kernel socket RX/wakeup path directly, removing the percentile-
+  /// distribution confound of subtracting two unrelated histograms (TSC
+  /// Tick-to-Trade p50 vs KernelRX-to-Send p50). If KernelRX→UserspaceRX p50
+  /// matches the (KernelRX-to-Send − Tick-to-Trade) gap, the RX-kernel
+  /// hypothesis is confirmed.
+  void record_rx_kernel_gap(std::int64_t kernel_recv_ns,
+                            std::int64_t userspace_recv_ns) noexcept {
+    if (kernel_recv_ns > 0 && userspace_recv_ns > kernel_recv_ns) {
+      const auto ns =
+          static_cast<std::uint64_t>(userspace_recv_ns - kernel_recv_ns);
+      rx_kernel_gap_.record(ns);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Order round-trip (external, nanosecond-based)
   // ---------------------------------------------------------------------------
 
@@ -148,9 +182,22 @@ public:
                   cal.freq_ghz());
     sys::log::signal_log(line);
 
-    // Tick-to-trade (TSC cycles → nanoseconds).
-    print_stage_stats("Tick-to-Trade", tick_to_trade_, cal, true);
-    sys::log::signal_log("  Total ticks processed: ",
+    // Tick-to-Trade: kernel SW RX timestamp (SO_TIMESTAMPNS) → post-send
+    // return. This is the headline metric — closest to the wire-to-wire
+    // industry definition that is reachable without HW timestamping NICs.
+    // Reported only when SO_TIMESTAMPNS cmsg is present (skipped otherwise;
+    // see TSC inner span below for the rdtsc-only fallback).
+    print_stage_stats("Tick-to-Trade", kernel_tick_to_trade_, cal, false);
+    sys::log::signal_log("  Total Tick-to-Trade samples: ",
+                         total_kernel_ticks_.load(std::memory_order_relaxed),
+                         '\n');
+
+    // TSC inner span: post-recvmmsg userspace → post-send return.
+    // Narrower window than Tick-to-Trade; excludes the RX kernel/wakeup
+    // path. Kept as a TSC-only cross-validation metric and as the fallback
+    // when SO_TIMESTAMPNS is unavailable.
+    print_stage_stats("TSC inner span", tick_to_trade_, cal, true);
+    sys::log::signal_log("  Total TSC inner samples: ",
                          total_ticks_.load(std::memory_order_relaxed), '\n');
     sys::log::signal_log('\n');
 
@@ -165,6 +212,11 @@ public:
                       true);
     print_stage_stats("Order Send", stages_.histogram(Stage::kOrderSend), cal,
                       true);
+    // Paired-delta validation: kernel SW RX → userspace post-recvmmsg-return.
+    // Directly measures the kernel socket RX/wakeup path on the same clock
+    // domain (CLOCK_REALTIME ns). Confirms or refutes whether the
+    // (KernelRX-to-Send − Tick-to-Trade) gap is RX-kernel-bound.
+    print_stage_stats("RX KernelGap", rx_kernel_gap_, cal, false);
     sys::log::signal_log('\n');
 
     // Order RTT (already in nanoseconds).
@@ -207,6 +259,15 @@ private:
   static constexpr std::size_t kRttNumBuckets = 4096;
   static constexpr std::uint64_t kRttBucketWidth = 1000;
 
+  // Kernel SW RX-based ns-domain metrics (CLOCK_REALTIME, not TSC).
+  // 1024 buckets × 256ns = range [0, 262144ns ≈ 262µs). Resolution: 256ns.
+  // Range deliberately wider than TSC stage histogram because kernel-RX paths
+  // can have larger tails on commodity NICs (NAPI/coalescing, cross-core
+  // wakeup, etc.). 64ns resolution was too tight: p99 reached 61µs of the
+  // 65µs upper bound in the first run, making p999/max untrustworthy.
+  static constexpr std::size_t kKernelNsNumBuckets = 1024;
+  static constexpr std::uint64_t kKernelNsBucketWidth = 256;
+
   // -- Stage breakdown indices ------------------------------------------------
 
   // Diagnostic per-stage breakdown. Separate from end-to-end measurement.
@@ -232,12 +293,25 @@ private:
   // Order RTT: different bucket width → separate histogram.
   ds::FixedLatencyHistogram<kRttNumBuckets, kRttBucketWidth> order_rtt_;
 
+  // Kernel SW RX → post-send-return: ns-domain (CLOCK_REALTIME).
+  // Separate from TSC histograms because clock domains differ — values are
+  // already in nanoseconds, no TSC calibration applied at print time.
+  ds::FixedLatencyHistogram<kKernelNsNumBuckets, kKernelNsBucketWidth>
+      kernel_tick_to_trade_;
+
+  // Paired-delta validation: kernel SW RX → userspace post-recvmmsg-return.
+  // Isolates the kernel socket RX/wakeup path directly. Same ns-domain and
+  // same bucket layout as kernel_tick_to_trade_ for easy comparison.
+  ds::FixedLatencyHistogram<kKernelNsNumBuckets, kKernelNsBucketWidth>
+      rx_kernel_gap_;
+
   // -- Diagnostic counters ----------------------------------------------------
 
   // std::atomic for cross-thread monitoring safety.
   // On x86-64, relaxed atomic store compiles to a plain MOV (zero overhead).
   std::atomic<std::uint64_t> total_ticks_{0};
   std::atomic<std::uint64_t> total_rtts_{0};
+  std::atomic<std::uint64_t> total_kernel_ticks_{0};
 
   // -- Warm-up data -----------------------------------------------------------
 
@@ -328,7 +402,9 @@ private:
     sys::log::signal_log("--- Warm-Up Analysis (first ", kWarmupTicks,
                          " updates) ---\n");
     if (warmup_t2t_count_ > 0) {
-      print_warmup_stage("Tick-to-Trade", warmup_tick_to_trade_,
+      // Warm-up array stores TSC inner span samples only (kernel-RX
+      // timestamps are not buffered for warm-up analysis).
+      print_warmup_stage("TSC inner span", warmup_tick_to_trade_,
                          warmup_t2t_count_, cal);
     }
     print_warmup_stage("Feed Parse", warmup_feed_parse_, warmup_parse_count_,

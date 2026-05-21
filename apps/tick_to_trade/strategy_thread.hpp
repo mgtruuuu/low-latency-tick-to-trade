@@ -378,7 +378,8 @@ private:
           }
 
           if (!send_handler_.on_signal(signal, order_mgr_, tracker_, tcp_sock_,
-                                       scratch_, tcp_tx_buf_, t0, conn_,
+                                       scratch_, tcp_tx_buf_, t0,
+                                       queued.kernel_recv_ns, conn_,
                                        log_queue_)) [[unlikely]] {
             disconnect_and_reconnect(
                 tcp_sock_, epoll_, conn_, tcp_rx_read_, tcp_rx_write_,

@@ -102,7 +102,7 @@ protected:
   bool dispatch_signal(const Signal &signal) {
     return handler_.on_signal(
         signal, *om_, tracker_, *send_sock_, scratch_, tcp_tx_, sys::rdtsc(),
-        conn_,
+        /*kernel_recv_ns=*/0, conn_,
         *log_queue_); // NOLINT(bugprone-unchecked-optional-access)
   }
 

@@ -2,9 +2,11 @@
  * @file main.cpp
  * @brief Tick-to-trade trading pipeline — cold-path launcher.
  *
- * End-to-end trading pipeline demonstrating wire-to-wire latency
- * measurement. Receives market data via UDP multicast, evaluates a
- * trading strategy, and sends orders via TCP to a simulated exchange.
+ * End-to-end trading pipeline demonstrating kernel-software-timestamped
+ * Tick-to-Trade latency measurement (SO_TIMESTAMPNS kernel RX → post-
+ * send-return; not hardware wire-to-wire). Receives market data via UDP
+ * multicast, evaluates a trading strategy, and sends orders via TCP to
+ * a simulated exchange.
  *
  * Architecture:
  *   Launcher (main thread) + two dedicated worker threads:
@@ -216,6 +218,23 @@ std::optional<mk::net::UdpSocket> create_mcast_receiver(const char *group,
   // SO_BUSY_POLL: kernel polls NIC driver before sleeping in epoll_wait.
   // Reduces recv wakeup latency by ~5-20us. Best-effort — requires NAPI driver.
   (void)sock.set_busy_poll(50);
+
+  // SO_TIMESTAMPNS: kernel stamps CLOCK_REALTIME at packet ingress.
+  // Drives the headline Tick-to-Trade metric (kernel SW RX timestamp →
+  // post-send return). Covers the RX kernel path that is invisible to
+  // userspace rdtsc. Best-effort: if setsockopt fails or cmsg is absent,
+  // the kernel-RX metric is skipped on that datagram (the TSC inner span
+  // cross-validation metric is unaffected).
+  {
+    const int ts_enable = 1;
+    if (::setsockopt(sock.get(), SOL_SOCKET, SO_TIMESTAMPNS, &ts_enable,
+                     sizeof(ts_enable)) < 0) {
+      mk::sys::log::signal_log(
+          "[PIPELINE] SO_TIMESTAMPNS setsockopt failed (kernel RX metric "
+          "disabled): ",
+          strerror(errno), '\n');
+    }
+  }
 
   return sock;
 }
