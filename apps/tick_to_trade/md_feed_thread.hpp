@@ -40,6 +40,7 @@
 #include <ctime>
 #include <sys/socket.h>
 #include <thread>
+#include <utility>
 
 namespace mk::app {
 
@@ -147,7 +148,7 @@ private:
           // sustained nonzero value suggests evaluating a larger batch
           // under load to amortize more recvmmsg overhead; it is not a
           // drop count and not direct proof of backlog.
-          if (static_cast<unsigned int>(rc) == batch_size) [[unlikely]] {
+          if (std::cmp_equal(rc, batch_size)) [[unlikely]] {
             ++src->stats.recv_batch_full;
           }
           for (int m = 0; m < rc; ++m) {

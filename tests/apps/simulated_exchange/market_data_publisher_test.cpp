@@ -338,7 +338,7 @@ TEST(MarketDataCodecGoldenTest, WireSizeIsExactly34Bytes) {
   static_assert(kMarketDataWireSize == 34,
                 "UDP MarketData wire size is fixed at 34 bytes");
 
-  MarketDataUpdate md{};
+  const MarketDataUpdate md{};
   std::array<std::byte, kMarketDataWireSize> buf{};
   const std::size_t written =
       serialize_market_data(std::span<std::byte>(buf), md);
@@ -418,7 +418,7 @@ TEST(ProtocolVersionTest, VerifyAcceptsCurrentRejectsOthers) {
 // successfully.
 TEST(ProtocolVersionTest, PackedFrameCarriesCurrentVersion) {
   // Pack a minimal NewOrder payload into a TLV frame.
-  NewOrder order{};
+  const NewOrder order{};
   std::array<std::byte, kNewOrderWireSize> payload_buf{};
   const std::size_t payload_len =
       serialize_new_order(std::span<std::byte>(payload_buf), order);
