@@ -140,6 +140,16 @@ private:
                1'000'000'000LL) +
               userspace_recv_ts.tv_nsec;
           src->stats.packets += static_cast<std::uint64_t>(rc);
+          // Full-batch indicator: rc == batch_size only proves recvmmsg hit
+          // its retrieval limit on this call, not that the kernel socket
+          // buffer has more queued (with batch_size == 1 every successful
+          // recv increments). At a realistic batch_size (currently 64), a
+          // sustained nonzero value suggests evaluating a larger batch
+          // under load to amortize more recvmmsg overhead; it is not a
+          // drop count and not direct proof of backlog.
+          if (static_cast<unsigned int>(rc) == batch_size) [[unlikely]] {
+            ++src->stats.recv_batch_full;
+          }
           for (int m = 0; m < rc; ++m) {
             src->stats.bytes += msgvec[m].msg_len;
           }

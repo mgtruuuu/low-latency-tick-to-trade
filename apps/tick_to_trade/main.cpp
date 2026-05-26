@@ -309,7 +309,7 @@ void print_shutdown_summary(
   mk::sys::log::signal_log("  FeedA bytes:           ", feed_a.stats.bytes,
                            '\n');
   mk::sys::log::signal_log(
-      "  FeedA drops:           ", feed_a.stats.datagrams_dropped, '\n');
+      "  FeedA recv batch full: ", feed_a.stats.recv_batch_full, '\n');
   mk::sys::log::signal_log(
       "  FeedA queue drops:     ", feed_a.stats.queue_drops, '\n');
   if (feed_b_enabled) {
@@ -318,7 +318,7 @@ void print_shutdown_summary(
     mk::sys::log::signal_log("  FeedB bytes:           ", feed_b.stats.bytes,
                              '\n');
     mk::sys::log::signal_log(
-        "  FeedB drops:           ", feed_b.stats.datagrams_dropped, '\n');
+        "  FeedB recv batch full: ", feed_b.stats.recv_batch_full, '\n');
     mk::sys::log::signal_log(
         "  FeedB queue drops:     ", feed_b.stats.queue_drops, '\n');
   }

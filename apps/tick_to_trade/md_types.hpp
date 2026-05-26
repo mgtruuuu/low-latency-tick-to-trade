@@ -59,8 +59,14 @@ struct MdFeedSource {
   struct Stats {
     std::uint64_t packets{0};
     std::uint64_t bytes{0};
-    std::uint64_t datagrams_dropped{0}; // recvmmsg overflow (rc == batch_size)
-    std::uint64_t queue_drops{0};       // SPSC push failed (strategy behind)
+    /// `recvmmsg()` returned the full batch (rc == batch_size). It is a
+    /// full-batch indicator, not a drop count and not proof of backlog —
+    /// with batch_size == 1 every successful recv would bump it. At the
+    /// production batch_size (currently 64), a sustained nonzero value
+    /// suggests evaluating a larger batch under load. Increments in
+    /// md_feed_thread.hpp inside the recvmmsg loop.
+    std::uint64_t recv_batch_full{0};
+    std::uint64_t queue_drops{0}; // SPSC push failed (strategy behind)
   } stats;
 };
 
