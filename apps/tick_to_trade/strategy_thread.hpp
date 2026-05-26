@@ -474,6 +474,27 @@ private:
 
               const std::size_t consumed =
                   net::kMessageHeaderSize + msg.header.payload_len;
+
+              // Fail-closed protocol-version check. A mismatch means the
+              // exchange is speaking a different build of the wire format —
+              // every byte past the header is suspect, including the
+              // payload_len we just trusted to compute `consumed`. The
+              // payload_len bound is at least sandboxed by the framer's
+              // upfront bounds check inside unpack_message, but the
+              // payload contents are not trustworthy for any downstream
+              // accounting (order state, fills, kill-switch triggers).
+              // Trip the kill switch and skip the frame.
+              if (!verify_protocol_version(msg.header.version)) [[unlikely]] {
+                sys::log::signal_log(
+                    "[STRATEGY] Protocol version mismatch — got=",
+                    msg.header.version,
+                    " expected=", kProtocolVersion,
+                    " — frame skipped, kill switch tripped\n");
+                kill_switch_flag_.test_and_set(std::memory_order_relaxed);
+                tcp_rx_read_ += consumed;
+                continue;
+              }
+
               if (response_handler_.on_tcp_message(msg, order_mgr_, tracker_,
                                                    conn_, log_queue_)) {
                 kill_switch_flag_.test_and_set(std::memory_order_relaxed);

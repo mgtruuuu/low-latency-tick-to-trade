@@ -225,6 +225,17 @@ std::size_t serialize_one_event(const mk::app::ExchangeEvent &event,
     return false;
   }
 
+  // Fail-closed protocol-version check. A peer running a different build
+  // is speaking a different protocol; every byte past this header is
+  // suspect. Drop the frame and log loudly so the operator sees the
+  // version mismatch instead of a downstream "unknown msg_type" symptom.
+  if (!mk::app::verify_protocol_version(msg.header.version)) [[unlikely]] {
+    mk::sys::log::signal_log(
+        "[GATEWAY] Protocol version mismatch — got=", msg.header.version,
+        " expected=", mk::app::kProtocolVersion, " — frame rejected\n");
+    return false;
+  }
+
   const auto msg_type = static_cast<mk::app::MsgType>(msg.header.msg_type);
   req.gateway_id = gateway_id;
   req.session_id = session_id;
@@ -388,6 +399,21 @@ void recv_thread_main(
       // Peek at message type.
       mk::net::ParsedMessageView peek{};
       if (!mk::net::unpack_message(result.payload, peek)) {
+        consumed += static_cast<std::uint32_t>(result.frame_size);
+        continue;
+      }
+
+      // Fail-closed protocol-version check BEFORE the msg_type dispatch
+      // — otherwise a mismatched-version heartbeat from an old peer
+      // would be answered by the fast path below and silently confirm
+      // an incompatible session. parse_frame_to_request() repeats this
+      // check for the order path, but the heartbeat fast path bypasses
+      // it, so the gate must live here at the framing boundary.
+      if (!mk::app::verify_protocol_version(peek.header.version)) [[unlikely]] {
+        mk::sys::log::signal_log(
+            "[GW-", gateway_id,
+            "-RECV] Protocol version mismatch — got=", peek.header.version,
+            " expected=", mk::app::kProtocolVersion, " — frame rejected\n");
         consumed += static_cast<std::uint32_t>(result.frame_size);
         continue;
       }

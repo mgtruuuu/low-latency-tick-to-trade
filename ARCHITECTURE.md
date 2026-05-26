@@ -27,7 +27,7 @@
   │                     │                 │spawn│    spawn│    spawn│                               │
   │                     │                 │     ▼         ▼         │                               │
   │ shm event poll      │   UDP multicast │ ┌────────────────────┐  │  ┌────────────────────────┐   │
-  │ UDP multicast pub   │   (36B/dgram)   │ │ MD Feed Thread     │  │  │ Async Logger Thread    │   │
+  │ UDP multicast pub   │   (34B/dgram)   │ │ MD Feed Thread     │  │  │ Async Logger Thread    │   │
   │                     ├────────────────►│ │(--pin_core_md)     │  │  │(--pin_core_logger)     │   │
   │                     │                 │ │                    │  │  │                        │   │
   │                     │                 │ │ recvmmsg()×64      │  │  │ drain SPSC log         │   │
@@ -154,7 +154,7 @@ UDP datagram arrives at NIC
 │  for each datagram:                               │
 │    parse SO_TIMESTAMPNS cmsg → t_kernel_rx        │
 │    FeedHandler::on_udp_data()                     │
-│      ├─ parse 36-byte datagram                    │
+│      ├─ parse 34-byte datagram                    │
 │      ├─ sequence gap detection (per-feed)         │
 │      └─ duplicate filtering                       │
 │    t1 = rdtsc()        ← [PROFILE_STAGES only]    │
@@ -205,17 +205,18 @@ Latencies tracked:
 
 Two independent protocols, chosen for different performance requirements.
 
-### UDP Market Data (36 bytes, no framing)
+### UDP Market Data (34 bytes, no framing)
 
 One datagram = one update. No TLV header — the datagram boundary is the frame. The `md_type` field distinguishes BBO updates (quotes) from trades.
 
 ```
- 0       8      12  13  14  16      24      28       36
- ┌───────┬───────┬───┬───┬───┬───────┬───────┬────────┐
- │seq_num│sym_id │typ│sid│pad│ price │  qty  │exch_ts │
- │ u64   │ u32   │u8 │u8 │2B │ i64   │ u32   │  i64   │
- └───────┴───────┴───┴───┴───┴───────┴───────┴────────┘
+ 0       8      12  13  14      22      26       34
+ ┌───────┬───────┬───┬───┬───────┬───────┬────────┐
+ │seq_num│sym_id │typ│sid│ price │  qty  │exch_ts │
+ │ u64   │ u32   │u8 │u8 │ i64   │ u32   │  i64   │
+ └───────┴───────┴───┴───┴───────┴───────┴────────┘
   typ: 0 = BBO update, 1 = Trade
+  No padding — codec uses memcpy so wire alignment is not required.
 ```
 
 **Why no TLV header?** Market data is latency-critical and fixed-format. A single bounds check at the start, then unchecked field reads — no per-field validation overhead. Datagram boundaries guarantee message atomicity (no partial reads).

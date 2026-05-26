@@ -40,9 +40,9 @@ static_assert(sizeof(algo::Qty) == 4, "Wire codec assumes Qty is 4 bytes");
 static_assert(sizeof(algo::Side) == 1, "Wire codec assumes Side is 1 byte");
 
 // ======================================================================
-// UDP Market Data (36 bytes)
+// UDP Market Data (34 bytes)
 // Wire layout:
-// [seq_num:8][symbol_id:4][md_msg_type:1][side:1][pad:2][price:8][qty:4][exchange_ts:8]
+// [seq_num:8][symbol_id:4][md_msg_type:1][side:1][price:8][qty:4][exchange_ts:8]
 // ======================================================================
 
 /// Serialize a MarketDataUpdate into buf (exactly kMarketDataWireSize bytes).
@@ -57,21 +57,29 @@ serialize_market_data(std::span<std::byte> buf,
   auto *p = buf.data();
   sys::store_be64(p + 0, md.seq_num);
   sys::store_be32(p + 8, md.symbol_id);
-  std::memset(p + 12, 0, 4); // md_msg_type + side + 2 bytes padding
   p[12] = static_cast<std::byte>(md.md_msg_type);
   p[13] = static_cast<std::byte>(md.side);
-  sys::store_be64(p + 16, static_cast<std::uint64_t>(md.price));
-  sys::store_be32(p + 24, md.qty);
-  sys::store_be64(p + 28, static_cast<std::uint64_t>(md.exchange_ts));
+  sys::store_be64(p + 14, static_cast<std::uint64_t>(md.price));
+  sys::store_be32(p + 22, md.qty);
+  sys::store_be64(p + 26, static_cast<std::uint64_t>(md.exchange_ts));
   return kMarketDataWireSize;
 }
 
 /// Deserialize a MarketDataUpdate from buf into out.
-/// @return true on success, false if buf is too small (out unchanged).
+///
+/// UDP market data is a fixed-format datagram protocol: one datagram is one
+/// message with size exactly kMarketDataWireSize. A buffer of any other size
+/// is rejected — this prevents a legacy or otherwise wrong-size datagram
+/// (e.g., an old 36B packet against a current 34B codec) from being silently
+/// parsed with shifted field offsets. If the wire format ever changes, the
+/// peers must be rebuilt from the same source; loose-equality acceptance
+/// would mask the version mismatch instead of surfacing it as a parse fail.
+///
+/// @return true on success, false if buf.size() != kMarketDataWireSize.
 [[nodiscard]] inline bool
 deserialize_market_data(std::span<const std::byte> buf,
                         MarketDataUpdate &out) noexcept {
-  if (buf.size() < kMarketDataWireSize) [[unlikely]] {
+  if (buf.size() != kMarketDataWireSize) [[unlikely]] {
     return false;
   }
 
@@ -80,9 +88,9 @@ deserialize_market_data(std::span<const std::byte> buf,
   out.symbol_id = sys::load_be32(p + 8);
   out.md_msg_type = static_cast<MdMsgType>(p[12]);
   out.side = static_cast<algo::Side>(p[13]);
-  out.price = static_cast<algo::Price>(sys::load_be64(p + 16));
-  out.qty = sys::load_be32(p + 24);
-  out.exchange_ts = static_cast<std::int64_t>(sys::load_be64(p + 28));
+  out.price = static_cast<algo::Price>(sys::load_be64(p + 14));
+  out.qty = sys::load_be32(p + 22);
+  out.exchange_ts = static_cast<std::int64_t>(sys::load_be64(p + 26));
   return true;
 }
 

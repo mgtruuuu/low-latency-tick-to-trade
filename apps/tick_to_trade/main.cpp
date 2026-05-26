@@ -619,7 +619,7 @@ int main(int argc, char **argv) {
   // amortizes syscall overhead across UDP burst. Matches kDrainBatch
   // in strategy_thread.hpp so consumer keeps pace with producer.
   constexpr unsigned int kMdBatchSize = 64;
-  constexpr std::size_t kMdBufSize = 64; // per-datagram buffer (36B wire + pad)
+  constexpr std::size_t kMdBufSize = 64; // per-datagram buffer (34B wire + pad)
   auto md_region =
       alloc_startup_region(mk::app::md_ctx_buf_size(kMdBatchSize, kMdBufSize));
   mk::sys::log::signal_log("[PIPELINE] MdCtx: batch=", kMdBatchSize,

@@ -29,25 +29,112 @@ namespace mk::app {
 // Protocol constants
 // ======================================================================
 
-inline constexpr std::uint16_t kProtocolVersion = 1;
+/// TCP protocol version stamped in every TLV header (message_codec.hpp).
+/// Receivers MUST reject frames whose header.version != kProtocolVersion;
+/// see verify_protocol_version() below. Bump this constant whenever any
+/// on-the-wire change is made — new MsgType, reordered MsgType, new field
+/// in any payload, payload size change, etc. — so a peer running an older
+/// build fails closed instead of silently misinterpreting bytes.
+///
+/// UDP exception: the version field lives only in the TCP TLV header.
+/// The UDP MarketData datagram has no transmitted version; the current
+/// 34B layout is protected only by exact datagram-size validation in
+/// deserialize_market_data(). A future same-size UDP schema change
+/// would need its own discriminator/versioned schema.
+///
+/// History:
+///   1 — initial protocol.
+///   2 — UDP MarketData payload compacted 36B->34B (size-rejected on
+///       mismatch). TCP MsgType numeric IDs unchanged from v1; explicit
+///       `= N` assignments + a per-entry static_assert block were added
+///       in this version to freeze the wire contract against future
+///       accidental renumbering. v2 receivers reject mismatched TCP
+///       input; retained v1 MsgType IDs keep any request processed by
+///       a v1 peer semantically compatible. A v1 peer has no version
+///       check of its own — fail-closed behavior on a mixed-version
+///       pair is therefore one-sided (v2-side rejection only); the
+///       cross-version safety guarantee depends on the ID-preservation
+///       contract above.
+inline constexpr std::uint16_t kProtocolVersion = 2;
 
 /// Message type discriminator for the TLV header (message_codec.hpp).
 /// Values 1-99 reserved for this protocol.
+///
+/// Source layout follows numeric ID order (1..13). Lifecycle grouping
+/// (NewOrder request/response, Cancel request/response, Modify
+/// request/response, etc.) is indicated by per-line inline tags rather
+/// than by source blocks — a request and its responses do not sit next
+/// to each other in source because the IDs were assigned in historical
+/// insertion order and that order is the wire contract.
+///
+/// The static_assert block below is the authoritative freeze for every
+/// entry's numeric value; the inline comments are a readability aid only.
+///
+/// Editing rules:
+///   - To ADD a new message type: append it at the end with the next
+///     unused integer, and add a matching static_assert. Never reuse a
+///     retired ID — a real external exchange protocol (FIX, ITCH) is
+///     append-only for the same reason.
+///   - To CHANGE an existing message's wire ID: bump kProtocolVersion
+///     above so peers fail closed on mismatch. Note that an old peer
+///     can still mis-handle requests whose IDs happen to overlap before
+///     it sees its first response — true safety against that case
+///     requires a connect-time handshake (currently not implemented).
+///   - The static_assert block must list every entry; a renumber that
+///     escapes the asserts is a silent wire-break and the asserts are
+///     the only build-time tripwire against it.
 enum class MsgType : std::uint16_t {
-  kMarketDataUpdate = 1, // Exchange -> Pipeline (UDP)
-  kNewOrder = 2,         // Pipeline -> Exchange (TCP)
-  kCancelOrder = 3,      // Pipeline -> Exchange (TCP)
-  kOrderAck = 4,         // Exchange -> Pipeline (TCP)
-  kOrderReject = 5,      // Exchange -> Pipeline (TCP)
-  kFillReport = 6,       // Exchange -> Pipeline (TCP)
-  kCancelAck = 7,        // Exchange -> Pipeline (TCP)
-  kCancelReject = 8,     // Exchange -> Pipeline (TCP)
-  kModifyOrder = 9,      // Pipeline -> Exchange (TCP)
-  kModifyAck = 10,       // Exchange -> Pipeline (TCP)
-  kModifyReject = 11,    // Exchange -> Pipeline (TCP)
-  kHeartbeat = 12,       // Pipeline -> Exchange (TCP)
-  kHeartbeatAck = 13,    // Exchange -> Pipeline (TCP)
+  kMarketDataUpdate = 1, // [UDP] Exchange -> Pipeline (standalone datagram)
+  kNewOrder = 2,         // [TCP] Pipeline -> Exchange (NewOrder request)
+  kCancelOrder = 3,      // [TCP] Pipeline -> Exchange (Cancel request)
+  kOrderAck = 4,         // [TCP] Exchange -> Pipeline (NewOrder accepted)
+  kOrderReject = 5,      // [TCP] Exchange -> Pipeline (NewOrder refused)
+  kFillReport = 6,       // [TCP] Exchange -> Pipeline (execution event,
+                         //       from NewOrder + Modify paths — see
+                         //       exchange_core::modify_order)
+  kCancelAck = 7,        // [TCP] Exchange -> Pipeline (Cancel accepted)
+  kCancelReject = 8,     // [TCP] Exchange -> Pipeline (Cancel refused)
+  kModifyOrder = 9,      // [TCP] Pipeline -> Exchange (Modify request)
+  kModifyAck = 10,       // [TCP] Exchange -> Pipeline (Modify accepted)
+  kModifyReject = 11,    // [TCP] Exchange -> Pipeline (Modify refused)
+  kHeartbeat = 12,       // [TCP] Pipeline -> Exchange (ping)
+  kHeartbeatAck = 13,    // [TCP] Exchange -> Pipeline (pong)
 };
+
+// Wire-ID freeze. Every MsgType entry must appear here. A renumber or
+// reorder that escapes these asserts is a silent wire-break — the
+// asserts are the only build-time guarantee that producer and consumer
+// agree on every numeric value. Pair every change with a corresponding
+// kProtocolVersion bump.
+static_assert(static_cast<std::uint16_t>(MsgType::kMarketDataUpdate) == 1);
+static_assert(static_cast<std::uint16_t>(MsgType::kNewOrder) == 2);
+static_assert(static_cast<std::uint16_t>(MsgType::kCancelOrder) == 3);
+static_assert(static_cast<std::uint16_t>(MsgType::kOrderAck) == 4);
+static_assert(static_cast<std::uint16_t>(MsgType::kOrderReject) == 5);
+static_assert(static_cast<std::uint16_t>(MsgType::kFillReport) == 6);
+static_assert(static_cast<std::uint16_t>(MsgType::kCancelAck) == 7);
+static_assert(static_cast<std::uint16_t>(MsgType::kCancelReject) == 8);
+static_assert(static_cast<std::uint16_t>(MsgType::kModifyOrder) == 9);
+static_assert(static_cast<std::uint16_t>(MsgType::kModifyAck) == 10);
+static_assert(static_cast<std::uint16_t>(MsgType::kModifyReject) == 11);
+static_assert(static_cast<std::uint16_t>(MsgType::kHeartbeat) == 12);
+static_assert(static_cast<std::uint16_t>(MsgType::kHeartbeatAck) == 13);
+
+/// Verify a TLV header's protocol version against the current build.
+/// Returns true if the version matches kProtocolVersion; false if the
+/// peer is speaking a different version of the protocol and the frame
+/// must be rejected.
+///
+/// Mismatch handling is the caller's responsibility — the canonical
+/// fail-closed behavior in this codebase is: log the mismatch with both
+/// versions, drop the frame, and (for the trading-pipeline side) signal
+/// the kill switch since further responses cannot be trusted. The
+/// exchange-gateway side rejects the frame; the TCP framer simply
+/// advances past it on the next loop iteration.
+[[nodiscard]] constexpr bool
+verify_protocol_version(std::uint16_t header_version) noexcept {
+  return header_version == kProtocolVersion;
+}
 
 /// Order rejection reason codes.
 enum class RejectReason : std::uint8_t {
@@ -65,12 +152,13 @@ enum class RejectReason : std::uint8_t {
 // ======================================================================
 // Market Data Update (UDP datagram payload)
 // ======================================================================
-// Wire layout (36 bytes, all big-endian):
-//   [seq_num:8][symbol_id:4][side:1][padding:3][price:8][qty:4][exchange_ts:8]
+// Wire layout (34 bytes, all big-endian):
+//   [seq_num:8][symbol_id:4][md_msg_type:1][side:1][price:8][qty:4][exchange_ts:8]
 //
 // No TLV header on UDP -- one datagram = one message.
-// Padding after side ensures price is 8-byte aligned on the wire for
-// clarity, though WireReader/WireWriter use memcpy (no alignment needed).
+// No padding on the wire -- the codec uses memcpy so wire alignment is
+// not required. Future schema evolution would use a versioned schema
+// (e.g., SBE) rather than reserved bytes.
 
 /// Market data message type (discriminates BBO update vs trade on UDP).
 enum class MdMsgType : std::uint8_t {
@@ -94,12 +182,11 @@ inline constexpr std::size_t kMarketDataWireSize =
     sizeof(std::uint32_t) + // symbol_id     (4)
     sizeof(std::uint8_t) +  // md_msg_type   (1)
     sizeof(std::uint8_t) +  // side          (1)
-    2 +                     // padding       (2) — aligns price to offset 16
     sizeof(std::int64_t) +  // price         (8)
     sizeof(std::uint32_t) + // qty           (4)
     sizeof(std::int64_t);   // exchange_ts   (8)
 // clang-format on
-static_assert(kMarketDataWireSize == 36);
+static_assert(kMarketDataWireSize == 34);
 
 // ======================================================================
 // New Order (TCP, wrapped in TLV message_codec)
