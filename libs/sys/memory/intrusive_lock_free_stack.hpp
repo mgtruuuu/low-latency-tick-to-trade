@@ -47,7 +47,14 @@ namespace mk::sys::memory {
 //   };
 
 struct LockFreeStackHook {
-  LockFreeStackHook *next{nullptr};
+  // Atomic (not a plain pointer) to close a field-level data race under
+  // recycling: a thread mid-pop reads old_head.ptr->next while another thread
+  // recycles that node and writes its next. The tag makes the racing CAS fail,
+  // but the field read/write is still a C++ data race on EVERY architecture
+  // unless `next` is atomic. relaxed suffices; link visibility for a successful
+  // pop comes from head_'s release/acquire. See lock_free_stack.hpp Node::next
+  // and studies/concurrency/src/tagged_treiber_stack.hpp.
+  std::atomic<LockFreeStackHook *> next{nullptr};
 };
 
 // =============================================================================
@@ -113,8 +120,8 @@ public:
       new_head.ptr = hook;
       new_head.tag = old_head.tag + 1;
 
-      // Link the new node to the current head.
-      hook->next = old_head.ptr;
+      // Link the new node to the current head (atomic store; see the hook).
+      hook->next.store(old_head.ptr, std::memory_order_relaxed);
 
       // Success — release: ensures the write to hook->next (above) is
       //   visible to the thread that later pops this node with acquire.
@@ -142,16 +149,18 @@ public:
       // Dereferencing old_head.ptr->next is safe ONLY in an object-pool
       // scenario where nodes are never freed to the OS while other threads
       // may still be reading them.
-      new_head.ptr = old_head.ptr->next;
+      new_head.ptr = old_head.ptr->next.load(std::memory_order_relaxed);
       new_head.tag = old_head.tag + 1;
 
       // Success — acquire: synchronizes with push's release, so we see
       //   the correct hook->next written by the pusher.
       //
-      // Failure — acquire (NOT relaxed!): on retry we DEREFERENCE
-      //   old_head.ptr->next. Without acquire, there is no synchronization
-      //   with the push that wrote that next pointer. On x86 (TSO) this
-      //   is masked, but on ARM64 (LDXR vs LDAXR) it is a real data race.
+      // Failure — acquire (NOT relaxed!): on retry we re-read
+      //   old_head.ptr->next; the failed CAS must supply the acquire
+      //   observation a fresh acquire load would have provided. This is about
+      //   LINK VISIBILITY, not data-race-freedom — `next` is atomic (see the
+      //   hook), so the field access never races regardless of memory order or
+      //   architecture.
     } while (!head_.compare_exchange_weak(old_head, new_head,
                                           std::memory_order_acquire,
                                           std::memory_order_acquire));

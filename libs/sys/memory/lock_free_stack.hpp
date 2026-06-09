@@ -74,8 +74,18 @@ public:
    * to keep the memory footprint small (dense packing).
    */
   struct Node {
-    Node *next = nullptr; // Pointer to the next node in the stack
-    T data;     // The actual user object
+    // `next` is atomic (not a plain Node*) to close a field-level data race
+    // under recycling: a thread mid-pop reads old_head.ptr->next while another
+    // thread recycles that same node and writes its next. The tag makes the
+    // racing CAS fail (no structural corruption), but the field read/write is
+    // still a C++ data race — on EVERY architecture, not just ARM — unless
+    // `next` is atomic. relaxed suffices; value correctness for a successful
+    // pop still comes from head_'s release/acquire (the next.store is
+    // sequenced-before the publishing CAS). See studies/concurrency/docs/
+    // 09_lock_free_patterns.md (§Minimal Runnable Example, recycling
+    // counterpart) and studies/concurrency/src/tagged_treiber_stack.hpp.
+    std::atomic<Node *> next{nullptr};
+    T data; // The actual user object
   };
 
 private:
@@ -140,8 +150,8 @@ public:
       // Increment the tag to distinguish this pointer version (ABA protection)
       new_head.tag = old_head.tag + 1;
 
-      // Link the new node to the current head
-      node->next = old_head.ptr;
+      // Link the new node to the current head (atomic store; see Node::next)
+      node->next.store(old_head.ptr, std::memory_order_relaxed);
 
       // compare_exchange_weak is sufficient and faster for loops.
       //
@@ -175,19 +185,20 @@ public:
       // Dereferencing old_head.ptr is safe here ONLY because we are in an
       // Object Pool scenario where nodes are never freed to the OS
       // while other threads might be accessing them.
-      new_head.ptr = old_head.ptr->next;
+      new_head.ptr = old_head.ptr->next.load(std::memory_order_relaxed);
 
       // Increment tag to maintain global versioning
       new_head.tag = old_head.tag + 1;
 
-      // Success — acquire: Synchronizes with push's release, so we see
+      // Success — acquire: synchronizes with push's release, so we see
       //   the correct node->next value written by the pusher.
       //
-      // Failure — acquire (NOT relaxed!):
-      //   On retry we DEREFERENCE old_head.ptr->next (line above).
-      //   Without acquire, there is no synchronization with the push
-      //   that wrote that next pointer. On x86 (TSO) this is masked,
-      //   but on ARM64 (LDXR vs LDAXR) it is a real data race.
+      // Failure — acquire (NOT relaxed!): on retry we re-read
+      //   old_head.ptr->next, and the failed CAS must supply the acquire
+      //   observation a fresh acquire load would have provided. This is about
+      //   LINK VISIBILITY (seeing the publishing push's next-write), not
+      //   data-race-freedom — `next` is atomic (see Node::next), so the field
+      //   access never races regardless of memory order or architecture.
     } while (!head_.compare_exchange_weak(old_head, new_head,
                                           std::memory_order_acquire,
                                           std::memory_order_acquire));
