@@ -60,8 +60,8 @@ jobs:
       - name: Build
         run: cmake --build build-asan -j$(nproc)
 
-      - name: Test (excluding ASan-incompatible death tests)
-        run: ctest --test-dir build-asan --output-on-failure -E "GlobalNewDeleteDeathTest"
+      - name: Test (dev-asan preset — ASAN/UBSAN_OPTIONS + filter from CMakePresets)
+        run: ctest --preset dev-asan
 
   # ---------------------------------------------------------------------------
   # Job 3: Release build + tests — exercises Layer 1 (compiler reordering)
@@ -104,13 +104,19 @@ jobs:
   # Why: enforces the contract behind every atomic load/store/RMW. Catches
   # missing memory_order, unprotected shared state, lock ordering bugs.
   #
-  # Excluded tests:
-  #   - LockFreeStack* / IntrusiveLockFreeStack* / ObjectPool stress:
-  #     TSan does not model 128-bit CAS (CMPXCHG16B) correctly and flags
-  #     false positives. The 64-bit CAS variants and unit tests still run.
-  #   - MapPopulateLabTest: environment-dependent (madvise behavior on CI
-  #     runners differs from baremetal).
-  #   - GlobalNewDeleteDeathTest: TSan + Debug + death tests do not mix.
+  # ctest preset (dev-tsan in CMakePresets.json) carries:
+  #   - TSAN_OPTIONS=halt_on_error=1:abort_on_error=1 so TSan reports become
+  #     test failures instead of warnings the harness ignores. Without this,
+  #     race reports print to stderr while gtest still records the test as
+  #     PASSED, which is how the recycling-recycle race on LockFreeStackHook
+  #     went undetected for so long. See 09_lock_free_patterns.md.
+  #   - filter.exclude limited to environment- / sanitizer-incompatible
+  #     suites only (MapPopulateLabTest = env-dependent madvise, and
+  #     GlobalNewDeleteDeathTest = TSan + Debug + death tests do not mix).
+  #     LockFreeStack* / IntrusiveLockFreeStack* / ObjectPool stress tests
+  #     are NOT excluded — earlier comments labeled these "TSan 128-bit CAS
+  #     false positives" but they were genuine field-level races on the
+  #     recycled node's next pointer; the fix was making `next` atomic.
   tsan:
     runs-on: ubuntu-24.04
 
@@ -133,8 +139,8 @@ jobs:
       - name: Build
         run: cmake --build build-tsan -j$(nproc)
 
-      - name: Test (excluding TSan false positives + env-dependent labs)
-        run: ctest --test-dir build-tsan --output-on-failure -E "LockFreeStackTest\.Stress|IntrusiveLockFreeStackTest\.(Concurrent|Stress)|ObjectPoolTest\.Stress|MapPopulateLabTest|GlobalNewDeleteDeathTest"
+      - name: Test (dev-tsan preset — TSAN_OPTIONS + filter from CMakePresets)
+        run: ctest --preset dev-tsan
 
   # ---------------------------------------------------------------------------
   # Job 5: clang-tidy — zero warnings enforced (WarningsAsErrors: '*')
