@@ -127,7 +127,7 @@ target_link_libraries(mk_sys PUBLIC Threads::Threads)
 # Without this, std::atomic::is_always_lock_free is false and the
 # static_assert in lock_free_stack.hpp fails.
 #
-# PUBLIC because any target including lock_free_stack.hpp (tests, ObjectPool)
+# PUBLIC because any target including lock_free_stack.hpp (tests, ConcurrentObjectPool)
 # also needs this instruction available.
 #
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")

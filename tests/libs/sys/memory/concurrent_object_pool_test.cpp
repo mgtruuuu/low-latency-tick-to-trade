@@ -1,6 +1,6 @@
 /**
- * @file object_pool_test.cpp
- * @brief GTest-based tests for ObjectPool -- fixed-size, lock-free pool.
+ * @file concurrent_object_pool_test.cpp
+ * @brief GTest-based tests for ConcurrentObjectPool -- fixed-size, MPMC pool.
  *
  * Additional Google Test concepts:
  *
@@ -26,7 +26,7 @@
  *  11. calculate_optimal_capacity returns 0 on overflow
  */
 
-#include "sys/memory/object_pool.hpp"
+#include "sys/memory/concurrent_object_pool.hpp"
 
 #include <gtest/gtest.h>
 
@@ -57,8 +57,8 @@ struct Order {
 // P0 safety-gate documentation (compile-time)
 // ============================================================================
 //
-// ObjectPool gates T on is_aggregate_v (construction axis) in addition to
-// is_trivially_destructible_v (destruction axis). is_aggregate is a
+// ConcurrentObjectPool gates T on is_aggregate_v (construction axis) in
+// addition to is_trivially_destructible_v (destruction axis). is_aggregate is a
 // conservative C++20 stand-in for implicit-lifetime (the precise trait
 // std::is_implicit_lifetime is C++23). These static_asserts pin, at compile
 // time, that the gate actually closes the gap:
@@ -74,9 +74,10 @@ struct Order {
 //   - `Order` (the pooled type) IS an aggregate, so it remains accepted.
 //
 // This is a negative test expressed via traits rather than a "fails to
-// compile" instantiation, because ObjectPool's constraint is a hard
-// static_assert (not SFINAE), so instantiating ObjectPool<NotImplicitLifetime>
-// could not be observed from within a compiling TU.
+// compile" instantiation, because ConcurrentObjectPool's constraint is a hard
+// static_assert (not SFINAE), so instantiating
+// ConcurrentObjectPool<NotImplicitLifetime> could not be observed from within
+// a compiling TU.
 namespace {
 // The user-provided copy constructor is intentionally NOT `= default`: a
 // user-provided copy ctor suppresses the implicit trivial move ctor, leaving
@@ -100,14 +101,6 @@ static_assert(!std::is_aggregate_v<NotImplicitLifetime>,
               "closing the implicit-lifetime hole");
 static_assert(std::is_aggregate_v<Order>,
               "Order is an aggregate — the pool accepts it");
-
-// ConcurrentObjectPool<T> is a naming-only alias for the default ObjectPool
-// policy (LockFreeStack), the symmetric counterpart to SingleThreadObjectPool.
-static_assert(
-    std::is_same_v<mk::sys::memory::ConcurrentObjectPool<Order>,
-                   mk::sys::memory::ObjectPool<
-                       Order, mk::sys::memory::LockFreeStack<Order>>>,
-    "ConcurrentObjectPool<T> must alias ObjectPool<T, LockFreeStack<T>>");
 } // namespace
 
 // ============================================================================
@@ -117,9 +110,9 @@ static_assert(
 // Computes 2MB Huge Page-aligned capacity via calculate_optimal_capacity(),
 // then creates a pool of that size.
 
-class ObjectPoolTest : public ::testing::Test {
+class ConcurrentObjectPoolTest : public ::testing::Test {
 protected:
-  using PoolType = mk::sys::memory::ObjectPool<Order>;
+  using PoolType = mk::sys::memory::ConcurrentObjectPool<Order>;
 
   static constexpr std::size_t kMinRequired = 1000;
   static constexpr std::size_t kCapacity =
@@ -136,8 +129,8 @@ protected:
 // produces a total byte count that fits within a 2MB-aligned chunk.
 // The actual memory is backed by MmapRegion (huge pages with THP fallback).
 
-TEST(ObjectPoolAlignment, CapacityAlignedToHugePage) {
-  using PoolType = mk::sys::memory::ObjectPool<Order>;
+TEST(ConcurrentObjectPoolAlignment, CapacityAlignedToHugePage) {
+  using PoolType = mk::sys::memory::ConcurrentObjectPool<Order>;
   constexpr std::size_t kCap = PoolType::calculate_optimal_capacity(1000);
 
   // Capacity must be at least the minimum requested
@@ -164,7 +157,7 @@ TEST(ObjectPoolAlignment, CapacityAlignedToHugePage) {
 // 2. Basic Allocate / Deallocate
 // ============================================================================
 
-TEST_F(ObjectPoolTest, AllocateReturnsNonNull) {
+TEST_F(ConcurrentObjectPoolTest, AllocateReturnsNonNull) {
   Order *o = pool_.allocate();
   // ASSERT_NE: if nullptr, subsequent dereference would be UB -- must be fatal
   ASSERT_NE(nullptr, o);
@@ -175,7 +168,7 @@ TEST_F(ObjectPoolTest, AllocateReturnsNonNull) {
 // 3. Two Allocations Return Different Addresses
 // ============================================================================
 
-TEST_F(ObjectPoolTest, TwoAllocationsReturnDifferentAddresses) {
+TEST_F(ConcurrentObjectPoolTest, TwoAllocationsReturnDifferentAddresses) {
   Order *o1 = pool_.allocate();
   Order *o2 = pool_.allocate();
   ASSERT_NE(nullptr, o1);
@@ -192,7 +185,7 @@ TEST_F(ObjectPoolTest, TwoAllocationsReturnDifferentAddresses) {
 // The internal LockFreeStack is LIFO.
 // Deallocate then immediately allocate should return the same address.
 
-TEST_F(ObjectPoolTest, DeallocatedObjectIsRecycledLIFO) {
+TEST_F(ConcurrentObjectPoolTest, DeallocatedObjectIsRecycledLIFO) {
   Order *o1 = pool_.allocate();
   ASSERT_NE(nullptr, o1);
   pool_.deallocate(o1);
@@ -206,7 +199,7 @@ TEST_F(ObjectPoolTest, DeallocatedObjectIsRecycledLIFO) {
 // 5. Pool Exhaustion
 // ============================================================================
 
-TEST_F(ObjectPoolTest, AllocateReturnsNullWhenExhausted) {
+TEST_F(ConcurrentObjectPoolTest, AllocateReturnsNullWhenExhausted) {
   std::vector<Order *> allocated;
   allocated.reserve(kCapacity);
 
@@ -228,7 +221,7 @@ TEST_F(ObjectPoolTest, AllocateReturnsNullWhenExhausted) {
 // 6. Multi-Thread Stress Test
 // ============================================================================
 
-TEST_F(ObjectPoolTest, StressTestNoLeaksOrCorruption) {
+TEST_F(ConcurrentObjectPoolTest, StressTestNoLeaksOrCorruption) {
   constexpr int kIterations = 50'000;
   unsigned int n_threads = std::thread::hardware_concurrency();
   if (n_threads == 0) {
@@ -282,11 +275,11 @@ TEST_F(ObjectPoolTest, StressTestNoLeaksOrCorruption) {
 // 7. MmapRegion Backing — Construction with Different Prefault Policies
 // ============================================================================
 //
-// Verifies that ObjectPool constructs successfully with both prefault policies.
+// Verifies that the pool constructs successfully with both prefault policies.
 // kPopulateWrite is the default (prefaults all pages); kNone defers faults.
 
-TEST(ObjectPoolMmapBacking, ConstructsWithPopulateWrite) {
-  using PoolType = mk::sys::memory::ObjectPool<Order>;
+TEST(ConcurrentObjectPoolMmapBacking, ConstructsWithPopulateWrite) {
+  using PoolType = mk::sys::memory::ConcurrentObjectPool<Order>;
   using PrefaultPolicy = mk::sys::memory::PrefaultPolicy;
 
   constexpr std::size_t kCap = PoolType::calculate_optimal_capacity(100);
@@ -300,8 +293,8 @@ TEST(ObjectPoolMmapBacking, ConstructsWithPopulateWrite) {
   pool.deallocate(o);
 }
 
-TEST(ObjectPoolMmapBacking, ConstructsWithNoPrefault) {
-  using PoolType = mk::sys::memory::ObjectPool<Order>;
+TEST(ConcurrentObjectPoolMmapBacking, ConstructsWithNoPrefault) {
+  using PoolType = mk::sys::memory::ConcurrentObjectPool<Order>;
   using PrefaultPolicy = mk::sys::memory::PrefaultPolicy;
 
   constexpr std::size_t kCap = PoolType::calculate_optimal_capacity(100);
@@ -315,8 +308,8 @@ TEST(ObjectPoolMmapBacking, ConstructsWithNoPrefault) {
   pool.deallocate(o);
 }
 
-TEST(ObjectPoolMmapBacking, ConstructsWithManualWrite) {
-  using PoolType = mk::sys::memory::ObjectPool<Order>;
+TEST(ConcurrentObjectPoolMmapBacking, ConstructsWithManualWrite) {
+  using PoolType = mk::sys::memory::ConcurrentObjectPool<Order>;
   using PrefaultPolicy = mk::sys::memory::PrefaultPolicy;
 
   constexpr std::size_t kCap = PoolType::calculate_optimal_capacity(100);
@@ -333,12 +326,12 @@ TEST(ObjectPoolMmapBacking, ConstructsWithManualWrite) {
 // 8. NUMA Binding
 // ============================================================================
 //
-// Verifies that ObjectPool constructs successfully with a NUMA node parameter.
+// Verifies that the pool constructs successfully with a NUMA node parameter.
 // On systems without NUMA, bind_numa_node() silently fails (best-effort),
 // but the pool must still be fully functional.
 
-TEST(ObjectPoolNumaBinding, ConstructsWithNumaNode) {
-  using PoolType = mk::sys::memory::ObjectPool<Order>;
+TEST(ConcurrentObjectPoolNumaBinding, ConstructsWithNumaNode) {
+  using PoolType = mk::sys::memory::ConcurrentObjectPool<Order>;
   using PrefaultPolicy = mk::sys::memory::PrefaultPolicy;
 
   constexpr std::size_t kCap = PoolType::calculate_optimal_capacity(100);
@@ -354,8 +347,8 @@ TEST(ObjectPoolNumaBinding, ConstructsWithNumaNode) {
   pool.deallocate(o);
 }
 
-TEST(ObjectPoolNumaBinding, ConstructsWithNoBinding) {
-  using PoolType = mk::sys::memory::ObjectPool<Order>;
+TEST(ConcurrentObjectPoolNumaBinding, ConstructsWithNoBinding) {
+  using PoolType = mk::sys::memory::ConcurrentObjectPool<Order>;
   using PrefaultPolicy = mk::sys::memory::PrefaultPolicy;
 
   constexpr std::size_t kCap = PoolType::calculate_optimal_capacity(100);
@@ -374,13 +367,13 @@ TEST(ObjectPoolNumaBinding, ConstructsWithNoBinding) {
 // 9. Page Locking (MAP_LOCKED)
 // ============================================================================
 //
-// Verifies that ObjectPool constructs successfully with lock_pages=true.
+// Verifies that the pool constructs successfully with lock_pages=true.
 // May fail on systems with low RLIMIT_MEMLOCK, in which case the pool
 // still constructs (MAP_LOCKED failure is non-fatal at the mmap level —
 // the kernel may silently ignore it or the factory succeeds without locking).
 
-TEST(ObjectPoolPageLocking, ConstructsWithLockedPages) {
-  using PoolType = mk::sys::memory::ObjectPool<Order>;
+TEST(ConcurrentObjectPoolPageLocking, ConstructsWithLockedPages) {
+  using PoolType = mk::sys::memory::ConcurrentObjectPool<Order>;
   using PrefaultPolicy = mk::sys::memory::PrefaultPolicy;
 
   constexpr std::size_t kCap = PoolType::calculate_optimal_capacity(100);
@@ -398,11 +391,11 @@ TEST(ObjectPoolPageLocking, ConstructsWithLockedPages) {
 // 10. MmapRegion-Accepting Constructor
 // ============================================================================
 //
-// Verifies that ObjectPool works when the caller provides a pre-allocated
+// Verifies that the pool works when the caller provides a pre-allocated
 // MmapRegion. This enables shared memory pools, file-backed pools, etc.
 
-TEST(ObjectPoolMmapRegion, ConstructsWithCallerProvidedRegion) {
-  using PoolType = mk::sys::memory::ObjectPool<Order>;
+TEST(ConcurrentObjectPoolMmapRegion, ConstructsWithCallerProvidedRegion) {
+  using PoolType = mk::sys::memory::ConcurrentObjectPool<Order>;
   using NodeType = PoolType::NodeType;
 
   constexpr std::size_t kCap = 64;
@@ -425,8 +418,8 @@ TEST(ObjectPoolMmapRegion, ConstructsWithCallerProvidedRegion) {
   pool.deallocate(o);
 }
 
-TEST(ObjectPoolMmapRegion, ExhaustsAndRecyclesWithExternalRegion) {
-  using PoolType = mk::sys::memory::ObjectPool<Order>;
+TEST(ConcurrentObjectPoolMmapRegion, ExhaustsAndRecyclesWithExternalRegion) {
+  using PoolType = mk::sys::memory::ConcurrentObjectPool<Order>;
   using NodeType = PoolType::NodeType;
 
   constexpr std::size_t kCap = 64;
@@ -459,17 +452,17 @@ TEST(ObjectPoolMmapRegion, ExhaustsAndRecyclesWithExternalRegion) {
 }
 
 // ============================================================================
-// 11. Death Test: Constructor Aborts on Capacity Overflow (renumbered)
+// 11. Death Test: Constructor Aborts on Capacity Overflow
 // ============================================================================
 //
 // The constructor checks that capacity * sizeof(NodeType) doesn't overflow
 // std::size_t. If it does, it calls std::abort() (unrecoverable).
 // Google Test convention: death test suite names end with "DeathTest".
 
-using ObjectPoolDeathTest = ObjectPoolTest;
+using ConcurrentObjectPoolDeathTest = ConcurrentObjectPoolTest;
 
-TEST_F(ObjectPoolDeathTest, ConstructorAbortsOnCapacityOverflow) {
-  using PoolType = mk::sys::memory::ObjectPool<Order>;
+TEST_F(ConcurrentObjectPoolDeathTest, ConstructorAbortsOnCapacityOverflow) {
+  using PoolType = mk::sys::memory::ConcurrentObjectPool<Order>;
 
   // SIZE_MAX objects: capacity * sizeof(NodeType) would overflow.
   EXPECT_DEATH(
@@ -484,8 +477,8 @@ TEST_F(ObjectPoolDeathTest, ConstructorAbortsOnCapacityOverflow) {
 // In constexpr context, calculate_optimal_capacity cannot abort, so it
 // returns 0 to signal that the requested capacity is unreasonable.
 
-TEST(ObjectPoolAlignment, CalculateOptimalCapacityOverflowReturnsZero) {
-  using PoolType = mk::sys::memory::ObjectPool<Order>;
+TEST(ConcurrentObjectPoolAlignment, CalculateOptimalCapacityOverflowReturnsZero) {
+  using PoolType = mk::sys::memory::ConcurrentObjectPool<Order>;
 
   // Multiplication overflow: SIZE_MAX objects.
   constexpr std::size_t kOverflow = PoolType::calculate_optimal_capacity(
@@ -500,97 +493,4 @@ TEST(ObjectPoolAlignment, CalculateOptimalCapacityOverflowReturnsZero) {
   constexpr std::size_t kAlignOverflow =
       PoolType::calculate_optimal_capacity(kJustUnder);
   EXPECT_EQ(0U, kAlignOverflow);
-}
-
-// ============================================================================
-// SingleThreadStack policy tests
-// ============================================================================
-//
-// ObjectPool<T, SingleThreadStack<T>> — same pool logic, zero synchronization.
-// These mirror the basic functional tests above but with the single-threaded
-// free-list policy. No multi-threaded stress test (single-threaded by design).
-
-#include "sys/memory/single_thread_stack.hpp"
-
-using SingleThreadPool =
-    mk::sys::memory::ObjectPool<Order,
-                                mk::sys::memory::SingleThreadStack<Order>>;
-
-class ObjectPoolSingleThreadTest : public ::testing::Test {
-protected:
-  using PoolType = SingleThreadPool;
-  static constexpr std::size_t kMinRequired = 1000;
-  static constexpr std::size_t kCapacity =
-      PoolType::calculate_optimal_capacity(kMinRequired);
-
-  PoolType pool_{kCapacity};
-};
-
-// 12. SingleThreadStack pool: basic allocate
-
-TEST_F(ObjectPoolSingleThreadTest, AllocateReturnsNonNull) {
-  Order *order = pool_.allocate();
-  ASSERT_NE(nullptr, order);
-  pool_.deallocate(order);
-}
-
-// 13. SingleThreadStack pool: two allocations return different addresses
-
-TEST_F(ObjectPoolSingleThreadTest, TwoAllocationsReturnDifferentAddresses) {
-  Order *a = pool_.allocate();
-  Order *b = pool_.allocate();
-  ASSERT_NE(nullptr, a);
-  ASSERT_NE(nullptr, b);
-  EXPECT_NE(a, b);
-  pool_.deallocate(a);
-  pool_.deallocate(b);
-}
-
-// 14. SingleThreadStack pool: LIFO recycling
-
-TEST_F(ObjectPoolSingleThreadTest, DeallocatedObjectIsRecycledLIFO) {
-  Order *first = pool_.allocate();
-  ASSERT_NE(nullptr, first);
-  pool_.deallocate(first);
-
-  Order *recycled = pool_.allocate();
-  // LIFO: most recently deallocated object should be returned.
-  EXPECT_EQ(first, recycled);
-  pool_.deallocate(recycled);
-}
-
-// 15. SingleThreadStack pool: exhaustion returns nullptr
-
-TEST_F(ObjectPoolSingleThreadTest, AllocateReturnsNullWhenExhausted) {
-  std::vector<Order *> allocated;
-  allocated.reserve(kCapacity);
-
-  for (std::size_t i = 0; i < kCapacity; ++i) {
-    Order *order = pool_.allocate();
-    ASSERT_NE(nullptr, order) << "Failed at allocation " << i;
-    allocated.push_back(order);
-  }
-
-  // Pool is exhausted — next allocate should return nullptr.
-  EXPECT_EQ(nullptr, pool_.allocate());
-
-  for (Order *order : allocated) {
-    pool_.deallocate(order);
-  }
-}
-
-// 16. NodeType size matches LockFreeStack (same layout)
-
-TEST(ObjectPoolSingleThreadStatic, NodeTypeSizeMatchesLockFreeStack) {
-  using LFNode = mk::sys::memory::LockFreeStack<Order>::NodeType;
-  using STNode = mk::sys::memory::SingleThreadStack<Order>::NodeType;
-
-  // Both Node structs have identical layout: { Node* next; T data; }.
-  // This ensures ObjectPool::deallocate() pointer arithmetic is correct
-  // regardless of which free-list policy is used.
-  EXPECT_EQ(sizeof(LFNode), sizeof(STNode));
-  EXPECT_EQ(alignof(LFNode), alignof(STNode));
-
-  // Verify offsetof(data) is the same — critical for deallocate().
-  EXPECT_EQ(offsetof(LFNode, data), offsetof(STNode, data));
 }

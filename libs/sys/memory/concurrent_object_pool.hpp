@@ -1,15 +1,14 @@
 /**
- * @file object_pool.hpp
- * @brief Fixed-size Object Pool backed by MmapRegion with pluggable free-list.
+ * @file concurrent_object_pool.hpp
+ * @brief Fixed-size concurrent (MPMC) object pool backed by MmapRegion.
  *
- * Pre-allocates a fixed number of objects and manages them using a free-list
- * stack whose synchronization strategy is a template parameter (policy-based
- * design).
+ * Pre-allocates a fixed number of objects and manages them with a lock-free
+ * (Treiber) free-list stack — LockFreeStack<T>, 128-bit CAS, ABA-safe — so
+ * allocate()/deallocate() are safe to call from multiple threads.
  *
- * Free-list policies:
- *   - LockFreeStack<T> (default) — MPMC, 128-bit CAS. For cross-thread pools.
- *   - SingleThreadStack<T>       — Zero synchronization. For per-core hot-path
- *                                  pools (the common HFT case).
+ * For per-core / thread-per-core hot paths where a pool is used by exactly one
+ * thread, prefer SingleThreadObjectPool<T> (single_thread_object_pool.hpp):
+ * zero synchronization, an index free list instead of a wrapper node + CAS.
  *
  * Memory is allocated via MmapRegion with a two-level fallback strategy:
  *   1. MAP_HUGETLB (explicit 2MB huge pages) — best TLB efficiency
@@ -27,7 +26,6 @@
 #include "sys/memory/lock_free_stack.hpp"
 #include "sys/memory/mmap_utils.hpp"
 #include <cassert>
-#include <concepts>
 #include <cstddef>
 #include <cstdlib> // std::abort (capacity overflow check)
 #include <limits>
@@ -35,38 +33,13 @@
 
 namespace mk::sys::memory {
 
-// =============================================================================
-// FreeListPolicy concept — contract for ObjectPool free-list policies
-// =============================================================================
-//
-// A free-list must expose:
-//   - NodeType       — nested struct with { NodeType* next; T data; }.
-//   - push(NodeType*) noexcept — return a node to the pool.
-//   - try_pop()       noexcept — acquire a node (nullptr if empty).
-//   - empty()         noexcept — emptiness check.
-//
-// Both LockFreeStack<T> (MPMC) and SingleThreadStack<T> satisfy this.
-//
-// [Educational note]
-// This is a "structural" concept — it checks the interface shape, not
-// semantic guarantees. It cannot enforce "push then try_pop returns the
-// same node" (that is a runtime property). It CAN enforce that the
-// operations exist with correct signatures and noexcept specifiers.
-template <typename FL>
-concept FreeListPolicy = requires(FL fl, typename FL::NodeType *node) {
-  typename FL::NodeType;
-  { fl.push(node) } noexcept;
-  { fl.try_pop() } noexcept -> std::same_as<typename FL::NodeType *>;
-  { fl.empty() } noexcept -> std::same_as<bool>;
-};
-
 /**
- * @class ObjectPool
- * @brief Fixed-size Object Pool backed by MmapRegion with pluggable free-list.
+ * @class ConcurrentObjectPool
+ * @brief Fixed-size concurrent (MPMC) object pool backed by MmapRegion.
  * Features:
  * - Pre-allocated pool of objects to eliminate runtime allocations.
- * - Pluggable free-list policy (LockFreeStack for MPMC, SingleThreadStack
- *   for zero-overhead single-threaded hot paths).
+ * - Lock-free free list (LockFreeStack<T>, 128-bit CAS, ABA-safe) — safe for
+ *   multi-producer / multi-consumer use across threads.
  * - MmapRegion backing: huge pages (MAP_HUGETLB) with automatic fallback.
  * - Configurable prefault policy (default: kPopulateWrite for zero hot-path
  * faults).
@@ -74,38 +47,30 @@ concept FreeListPolicy = requires(FL fl, typename FL::NodeType *node) {
  *           an aggregate AND trivially destructible. These two checks lock the
  *           two safety axes — construction and destruction:
  *             - aggregate (+ trivial dtor below) => implicit-lifetime
- *                                       ([basic.types.general]: an aggregate
- *                                       whose destructor is not user-provided is
- *                                       an implicit-lifetime class — aggregate
- *                                       alone is NOT enough, since an aggregate
- *                                       may still declare a user-provided
- *                                       destructor), so allocate()'s raw storage
- *                                       can be field-written without placement-
- *                                       new (C++20 P0593R6 for malloc/operator
- *                                       new; this codebase assumes mmap behaves
- *                                       equivalently on supported toolchains).
+ *               ([basic.types.general]: an aggregate whose destructor is not
+ *               user-provided is an implicit-lifetime class — aggregate alone
+ *               is NOT enough, since an aggregate may still declare a
+ *               user-provided destructor), so allocate()'s raw storage can be
+ *               field-written without placement- new (C++20 P0593R6 for
+ *               malloc/operator new; this codebase assumes mmap behaves
+ *               equivalently on supported toolchains).
  *             - trivially destructible => the pool may reuse memory without
- *                                       calling ~T, and completes the
- *                                       implicit-lifetime condition above.
- *           is_aggregate is a CONSERVATIVE C++20 stand-in for the C++23 trait
- *           std::is_implicit_lifetime: sufficient but not necessary (it rejects
- *           some valid implicit-lifetime non-aggregates). Pooled types are
- *           simple PODs, so this costs nothing in practice. allocate() returns
- *           raw storage — the caller writes fields directly (no placement-new).
- * @tparam FreeList The free-list policy. Must satisfy FreeListPolicy concept.
- *           Defaults to LockFreeStack<T> (MPMC, 128-bit CAS).
- *           Use SingleThreadStack<T> for single-threaded hot paths
- *           (zero synchronization, ~20x lower push/pop latency).
+ *               calling ~T, and completes the implicit-lifetime condition
+ *               above. is_aggregate is a CONSERVATIVE C++20 stand-in for the
+ *               C++23 trait std::is_implicit_lifetime: sufficient but not
+ *               necessary (it rejects some valid implicit-lifetime
+ *               non-aggregates). Pooled types are simple PODs, so this costs
+ *               nothing in practice. allocate() returns raw storage — the
+ *               caller writes fields directly (no placement-new).
  */
-template <typename T, FreeListPolicy FreeList = LockFreeStack<T>>
-class ObjectPool {
+template <typename T> class ConcurrentObjectPool {
   // -- Destruction axis --
   // The pool reuses raw memory without ever calling ~T (deallocate just
   // returns the node to the free list). T must therefore be trivially
   // destructible, or skipping ~T would leak/corrupt resources.
   static_assert(
       std::is_trivially_destructible_v<T>,
-      "ObjectPool requires trivially destructible types "
+      "ConcurrentObjectPool requires trivially destructible types "
       "(raw memory is returned without constructor/destructor calls)");
 
   // -- Construction axis (independent of the destruction axis) --
@@ -136,36 +101,36 @@ class ObjectPool {
   // rejecting those exotic-but-valid types costs nothing in practice.
   static_assert(
       std::is_aggregate_v<T>,
-      "ObjectPool requires T to be an aggregate — a conservative C++20 "
-      "sufficient condition for implicit-lifetime. allocate() returns raw "
+      "ConcurrentObjectPool requires T to be an aggregate — a conservative "
+      "C++20 sufficient condition for implicit-lifetime. allocate() returns "
+      "raw "
       "storage that the caller field-initializes without placement-new, which "
       "is only defined for implicit-lifetime types. See the comment above for "
       "why is_trivially_destructible alone is insufficient.");
 
-  // NodeType (the free-list wrapper, { next; T data; }) is actually the FIRST
-  // type placed on the raw mmap storage: init_free_list() reinterprets the
-  // backing region as NodeType[] and push(&nodes[i]) field-writes node->next
-  // before any T is ever touched. So NodeType needs the SAME implicit-lifetime
-  // + trivially-destructible gate as T, for the same reason — otherwise a
-  // custom FreeList policy whose NodeType is standard-layout but NOT implicit-
-  // lifetime would reopen the UB on the wrapper. The built-in LockFreeStack /
-  // SingleThreadStack NodeTypes are aggregates (verified via
-  // __builtin_is_implicit_lifetime), so this is a forward-looking guard on the
-  // pluggable-policy contract.
+  // NodeType (LockFreeStack<T>::Node, { atomic<Node*> next; T data; }) is
+  // actually the FIRST type placed on the raw mmap storage: init_free_list()
+  // reinterprets the backing region as NodeType[] and push(&nodes[i]) field-
+  // writes node->next before any T is ever touched. So NodeType needs the SAME
+  // implicit-lifetime + trivially-destructible gate as T, for the same reason.
+  // LockFreeStack<T>::Node is an aggregate (verified via
+  // __builtin_is_implicit_lifetime); these asserts pin that contract against a
+  // future change to the node layout.
   static_assert(
-      std::is_aggregate_v<typename FreeList::NodeType> &&
-          std::is_trivially_destructible_v<typename FreeList::NodeType>,
-      "FreeList::NodeType must be an aggregate and trivially destructible "
-      "(implicit-lifetime), since the pool field-writes node->next on raw mmap "
-      "storage without placement-new — same contract as T above");
+      std::is_aggregate_v<typename LockFreeStack<T>::NodeType> &&
+          std::is_trivially_destructible_v<typename LockFreeStack<T>::NodeType>,
+      "LockFreeStack<T>::NodeType must be an aggregate and trivially "
+      "destructible (implicit-lifetime), since the pool field-writes "
+      "node->next "
+      "on raw mmap storage without placement-new — same contract as T above");
 
   static_assert(
-      std::is_standard_layout_v<typename FreeList::NodeType>,
+      std::is_standard_layout_v<typename LockFreeStack<T>::NodeType>,
       "NodeType must be standard-layout for offsetof() in deallocate");
 
 public:
-  using StackType = FreeList;
-  using NodeType = typename FreeList::NodeType;
+  using StackType = LockFreeStack<T>;
+  using NodeType = typename LockFreeStack<T>::NodeType;
 
   // ========================================================================
   // 1. Helper: Calculate Capacity
@@ -197,7 +162,8 @@ public:
         std::numeric_limits<std::size_t>::max() - (kHugePage - 1)) {
       return 0;
     }
-    const std::size_t total_chunk_size = mk::sys::align_up(bytes_needed, kHugePage);
+    const std::size_t total_chunk_size =
+        mk::sys::align_up(bytes_needed, kHugePage);
 
     return total_chunk_size / kNodeSize;
   }
@@ -232,14 +198,15 @@ public:
   ///   affects the anonymous fallback path. May fail due to RLIMIT_MEMLOCK.
   // (1) Convenience constructor — two-level huge page fallback.
   // Aborts if memory allocation fails (startup-time use).
-  explicit ObjectPool(std::size_t capacity,
-                      PrefaultPolicy pf = PrefaultPolicy::kPopulateWrite,
-                      int numa_node = -1, bool lock_pages = false)
+  explicit ConcurrentObjectPool(
+      std::size_t capacity, PrefaultPolicy pf = PrefaultPolicy::kPopulateWrite,
+      int numa_node = -1, bool lock_pages = false)
       : capacity_(capacity) {
 
     if (capacity_ >
         std::numeric_limits<std::size_t>::max() / sizeof(NodeType)) {
-      mk::sys::log::signal_log("[Critical] ObjectPool capacity overflow!\n");
+      mk::sys::log::signal_log(
+          "[Critical] ConcurrentObjectPool capacity overflow!\n");
       std::abort();
     }
 
@@ -260,21 +227,24 @@ public:
   // @param region   Pre-allocated MmapRegion. Must be valid and at least
   //                 capacity * sizeof(NodeType) bytes.
   // @param capacity Number of objects to manage from the region.
-  ObjectPool(MmapRegion region, std::size_t capacity) : capacity_(capacity) {
+  ConcurrentObjectPool(MmapRegion region, std::size_t capacity)
+      : capacity_(capacity) {
     if (!region.is_valid()) {
-      mk::sys::log::signal_log("[Critical] ObjectPool: invalid MmapRegion\n");
+      mk::sys::log::signal_log(
+          "[Critical] ConcurrentObjectPool: invalid MmapRegion\n");
       std::abort();
     }
     if (capacity_ >
         std::numeric_limits<std::size_t>::max() / sizeof(NodeType)) {
-      mk::sys::log::signal_log("[Critical] ObjectPool capacity overflow!\n");
+      mk::sys::log::signal_log(
+          "[Critical] ConcurrentObjectPool capacity overflow!\n");
       std::abort();
     }
     const std::size_t size_in_bytes = capacity_ * sizeof(NodeType);
     if (region.size() < size_in_bytes) {
       mk::sys::log::signal_log(
-          "[Critical] ObjectPool: MmapRegion too small (need=", size_in_bytes,
-          ", got=", region.size(), ")\n");
+          "[Critical] ConcurrentObjectPool: MmapRegion too small (need=",
+          size_in_bytes, ", got=", region.size(), ")\n");
       std::abort();
     }
 
@@ -301,9 +271,8 @@ public:
   }
 
   [[nodiscard]] std::size_t capacity() const noexcept { return capacity_; }
-  /// Emptiness check. For LockFreeStack (concurrent), uses a relaxed atomic
-  /// load — the result is immediately stale. For SingleThreadStack (single-
-  /// threaded), the result is exact. In either case, do NOT use for control
+  /// Emptiness check. Uses a relaxed atomic load on the LockFreeStack head, so
+  /// the result is immediately stale under concurrency. Do NOT use for control
   /// flow in concurrent environments (e.g., `if (!empty()) allocate()`).
   [[nodiscard]] bool empty() const noexcept { return free_list_.empty(); }
 
@@ -324,14 +293,5 @@ private:
   // automatically.
   MmapRegion memory_block_;
 };
-
-/// Concurrent (MPMC) object pool — an alias for the default ObjectPool policy
-/// (LockFreeStack, 128-bit CAS), named for symmetry with SingleThreadObjectPool
-/// (single_thread_object_pool.hpp). Use this when allocate() and deallocate()
-/// may run on different threads; use SingleThreadObjectPool for per-core /
-/// thread-per-core hot paths (no synchronization). This is a naming convenience
-/// only — it adds no behavior over ObjectPool<T, LockFreeStack<T>>.
-template <typename T>
-using ConcurrentObjectPool = ObjectPool<T, LockFreeStack<T>>;
 
 } // namespace mk::sys::memory

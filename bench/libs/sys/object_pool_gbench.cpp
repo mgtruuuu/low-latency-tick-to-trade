@@ -1,14 +1,13 @@
 /**
  * @file object_pool_gbench.cpp
- * @brief Google Benchmark version of ObjectPool benchmarks.
+ * @brief Google Benchmark version of object-pool benchmarks.
  *
  * Companion to object_pool_bench.cpp (custom rdtsc). This version uses Google
  * Benchmark for CI-friendly output, regression tracking, and JSON export.
  *
- * Compares three pool variants:
- *   - ObjectPool<T, LockFreeStack<T>>    (default) — MPMC, 128-bit CAS
- *   - ObjectPool<T, SingleThreadStack<T>>          — zero sync, wrapper Node
- *   - SingleThreadObjectPool<T>                    — zero sync, index free list
+ * Compares the two concrete pools:
+ *   - ConcurrentObjectPool<T>     — MPMC, LockFreeStack (128-bit CAS)
+ *   - SingleThreadObjectPool<T>   — zero sync, separate index free list
  *
  * Usage:
  *   cmake --build build -j$(nproc)
@@ -21,9 +20,8 @@
  *   taskset -c 2 ./build/bench/sys/object_pool_gbench
  */
 
-#include "sys/memory/object_pool.hpp"
+#include "sys/memory/concurrent_object_pool.hpp"
 #include "sys/memory/single_thread_object_pool.hpp"
-#include "sys/memory/single_thread_stack.hpp"
 
 #include <benchmark/benchmark.h>
 
@@ -45,14 +43,14 @@ struct alignas(64) Payload {
 constexpr std::size_t kPoolCapacity = 4096;
 
 // ============================================================================
-// LockFreeStack policy (default MPMC)
+// ConcurrentObjectPool (MPMC, LockFreeStack / 128-bit CAS)
 // ============================================================================
 
 // --- allocate ---
 // Batched: deallocate every kBatch iterations to avoid pool exhaustion.
 // NOLINTNEXTLINE(readability-identifier-naming)
 void BM_LFS_Allocate(benchmark::State &state) {
-  ObjectPool<Payload> pool(kPoolCapacity);
+  ConcurrentObjectPool<Payload> pool(kPoolCapacity);
   constexpr std::size_t kBatch = 1000;
   Payload *ptrs[kBatch];
   std::size_t idx = 0;
@@ -81,7 +79,7 @@ BENCHMARK(BM_LFS_Allocate);
 // --- deallocate ---
 // NOLINTNEXTLINE(readability-identifier-naming)
 void BM_LFS_Deallocate(benchmark::State &state) {
-  ObjectPool<Payload> pool(kPoolCapacity);
+  ConcurrentObjectPool<Payload> pool(kPoolCapacity);
   constexpr std::size_t kBatch = 1000;
   Payload *ptrs[kBatch];
   std::size_t idx = 0;
@@ -109,7 +107,7 @@ BENCHMARK(BM_LFS_Deallocate);
 // --- round-trip ---
 // NOLINTNEXTLINE(readability-identifier-naming)
 void BM_LFS_RoundTrip(benchmark::State &state) {
-  ObjectPool<Payload> pool(kPoolCapacity);
+  ConcurrentObjectPool<Payload> pool(kPoolCapacity);
 
   for (auto _ : state) {
     auto *p = pool.allocate();
@@ -121,86 +119,11 @@ void BM_LFS_RoundTrip(benchmark::State &state) {
 BENCHMARK(BM_LFS_RoundTrip);
 
 // ============================================================================
-// SingleThreadStack policy (zero sync)
-// ============================================================================
-
-using STSPool = ObjectPool<Payload, SingleThreadStack<Payload>>;
-
-// --- allocate ---
-// NOLINTNEXTLINE(readability-identifier-naming)
-void BM_STS_Allocate(benchmark::State &state) {
-  STSPool pool(kPoolCapacity);
-  constexpr std::size_t kBatch = 1000;
-  Payload *ptrs[kBatch];
-  std::size_t idx = 0;
-
-  for (auto _ : state) {
-    ptrs[idx] = pool.allocate();
-    benchmark::DoNotOptimize(ptrs[idx]);
-    ++idx;
-    if (idx == kBatch) {
-      state.PauseTiming();
-      for (auto *ptr : ptrs) {
-        pool.deallocate(ptr);
-      }
-      idx = 0;
-      state.ResumeTiming();
-    }
-  }
-
-  for (std::size_t i = 0; i < idx; ++i) {
-    pool.deallocate(ptrs[i]);
-  }
-}
-BENCHMARK(BM_STS_Allocate);
-
-// --- deallocate ---
-// NOLINTNEXTLINE(readability-identifier-naming)
-void BM_STS_Deallocate(benchmark::State &state) {
-  STSPool pool(kPoolCapacity);
-  constexpr std::size_t kBatch = 1000;
-  Payload *ptrs[kBatch];
-  std::size_t idx = 0;
-
-  for (auto &ptr : ptrs) {
-    ptr = pool.allocate();
-  }
-
-  for (auto _ : state) {
-    pool.deallocate(ptrs[idx]);
-    ++idx;
-    if (idx == kBatch) {
-      state.PauseTiming();
-      for (auto &ptr : ptrs) {
-        ptr = pool.allocate();
-      }
-      idx = 0;
-      state.ResumeTiming();
-    }
-  }
-}
-BENCHMARK(BM_STS_Deallocate);
-
-// --- round-trip ---
-// NOLINTNEXTLINE(readability-identifier-naming)
-void BM_STS_RoundTrip(benchmark::State &state) {
-  STSPool pool(kPoolCapacity);
-
-  for (auto _ : state) {
-    auto *p = pool.allocate();
-    benchmark::DoNotOptimize(p);
-    pool.deallocate(p);
-    benchmark::ClobberMemory();
-  }
-}
-BENCHMARK(BM_STS_RoundTrip);
-
-// ============================================================================
 // SingleThreadObjectPool (zero sync, separate index free list)
 // ============================================================================
-// The other single-thread pool: same zero synchronization as the
-// SingleThreadStack policy above, but a separate uint32_t index free list
-// (no per-slot wrapper pointer, no offsetof — deallocate is pointer-to-index).
+// The single-thread pool: no synchronization, a separate uint32_t index free
+// list (no per-slot wrapper pointer, no offsetof — deallocate is
+// pointer-to-index arithmetic).
 
 using STOPool = SingleThreadObjectPool<Payload>;
 

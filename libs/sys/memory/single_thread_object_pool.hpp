@@ -3,13 +3,13 @@
  * @brief Single-threaded, index-based object pool backed by MmapRegion.
  *
  * A concrete, zero-synchronization pool for the per-core hot-path case
- * (thread-per-core / shared-nothing). It is the "learning-clarity" sibling of
- * the generic policy-templated ObjectPool<T, FreeList> in object_pool.hpp:
+ * (thread-per-core / shared-nothing). It is the single-threaded sibling of
+ * ConcurrentObjectPool<T> in concurrent_object_pool.hpp:
  *
- *   ObjectPool<T, FreeList>      — generic, policy-based. Wraps each object in
- *                                  a Node { next; T data; } and recovers the
- *                                  node from a T* via offsetof in deallocate().
- *                                  Default policy is the MPMC LockFreeStack.
+ *   ConcurrentObjectPool<T>      — MPMC. Wraps each object in a
+ *                                  Node { next; T data; } (LockFreeStack node)
+ *                                  and recovers the node from a T* via offsetof
+ *                                  in deallocate(). 128-bit CAS, ABA-tagged.
  *   SingleThreadObjectPool<T>    — this file. Separate, parallel storage: a raw
  *                                  T[] slot array plus a uint32_t index free
  *                                  list (ds::IndexFreeStack). No per-slot
@@ -21,13 +21,13 @@
  *   with union active-member rules: a free slot's active member is the index,
  *   and returning &slot.data for the caller to field-write would couple "is the
  *   T member's lifetime active yet?" to caller behavior outside the pool. That
- *   is exactly the implicit-lifetime ambiguity that object_pool.hpp's
- *   static_assert gate was added to make explicit. Keeping the free-list
- *   metadata in a SEPARATE array means it never overlaps T storage: a slot is
- *   always usable as raw storage for an implicit-lifetime T, with the same
- *   simple lifetime story the pool's T gate validates. (A free slot may still
- *   hold stale T bits; T is trivially destructible, so they are simply
- *   overwritten by the next owner.)
+ *   is exactly the implicit-lifetime ambiguity that
+ *   concurrent_object_pool.hpp's static_assert gate was added to make explicit.
+ *   Keeping the free-list metadata in a SEPARATE array means it never overlaps
+ *   T storage: a slot is always usable as raw storage for an implicit-lifetime
+ *   T, with the same simple lifetime story the pool's T gate validates. (A free
+ *   slot may still hold stale T bits; T is trivially destructible, so they are
+ *   simply overwritten by the next owner.)
  *
  * Memory layout — one MmapRegion, partitioned into two sections:
  *
@@ -35,8 +35,7 @@
  *   ^ region base                ^ aligned to alignof(uint32_t)
  *
  * Thread safety: NONE. Caller must ensure single-threaded access. For
- * concurrent pools use ObjectPool<T, LockFreeStack<T>> (the default
- * ObjectPool).
+ * concurrent (MPMC) use, see ConcurrentObjectPool<T>.
  */
 
 #pragma once
@@ -61,26 +60,26 @@ namespace mk::sys::memory {
  * @class SingleThreadObjectPool
  * @brief Fixed-size, single-threaded object pool (raw T[] + index free list).
  * @tparam T Object type. Enforced (static_assert): T must be an aggregate AND
- *           trivially destructible — the same implicit-lifetime + destruction
- *           gate as ObjectPool's T (see object_pool.hpp for the full standard
- *           reasoning). allocate() returns a pointer into the raw mmap-backed
- *           T[] slot array; the caller writes fields directly with no
- *           placement-new, which is only defined for implicit-lifetime types.
- *           Because the free-list metadata lives in a SEPARATE array (not a
- *           Node wrapper over the storage), there is no wrapper/NodeType type
- *           to gate — only T itself.
+ *         trivially destructible — the same implicit-lifetime + destruction
+ *         gate as ConcurrentObjectPool's T (see concurrent_object_pool.hpp
+ *         for the full standard reasoning). allocate() returns a pointer into
+ *         the raw mmap-backed T[] slot array; the caller writes fields directly
+ *         with no placement-new, which is only defined for implicit-lifetime
+ *         types. Because the free-list metadata lives in a SEPARATE array (not
+ *         a Node wrapper over the storage), there is no wrapper/NodeType type
+ *         to gate — only T itself.
  */
 template <typename T> class SingleThreadObjectPool {
-  // Same two safety axes as ObjectPool. The detailed standard explanation
-  // lives on object_pool.hpp; the short version:
+  // Same two safety axes as ConcurrentObjectPool. The detailed standard
+  // explanation lives on concurrent_object_pool.hpp; the short version:
   //   - aggregate (+ trivial dtor) => implicit-lifetime, so the raw T[] slots
   //     may be field-written without placement-new.
   //   - trivially destructible     => the pool reuses slots without calling ~T.
   static_assert(std::is_aggregate_v<T>,
                 "SingleThreadObjectPool requires T to be an aggregate — a "
                 "conservative C++20 sufficient condition for implicit-lifetime "
-                "(see object_pool.hpp). allocate() field-writes raw storage "
-                "without placement-new.");
+                "(see concurrent_object_pool.hpp). allocate() field-writes raw "
+                "storage without placement-new.");
   static_assert(std::is_trivially_destructible_v<T>,
                 "SingleThreadObjectPool requires trivially destructible T "
                 "(slots are reused without calling ~T)");
@@ -246,8 +245,8 @@ private:
     // a 0 or > UINT32_MAX capacity cannot be represented.
     const bool bad_capacity =
         capacity == 0 ||
-        capacity > static_cast<std::size_t>(
-                       std::numeric_limits<std::uint32_t>::max());
+        capacity >
+            static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max());
     // T slot array bytes (capacity * sizeof(T)) must not overflow.
     const bool slots_overflow = capacity > kMax / sizeof(T);
     if (bad_capacity || slots_overflow) {
