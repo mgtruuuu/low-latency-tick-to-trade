@@ -33,6 +33,7 @@
 #include <atomic>
 #include <cstdint>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 // ============================================================================
@@ -51,6 +52,55 @@ struct Order {
   char side;
   char padding[32];
 };
+
+// ============================================================================
+// P0 safety-gate documentation (compile-time)
+// ============================================================================
+//
+// ObjectPool gates T on is_aggregate_v (construction axis) in addition to
+// is_trivially_destructible_v (destruction axis). is_aggregate is a
+// conservative C++20 stand-in for implicit-lifetime (the precise trait
+// std::is_implicit_lifetime is C++23). These static_asserts pin, at compile
+// time, that the gate actually closes the gap:
+//
+//   - `NotImplicitLifetime` has a user-provided copy constructor, which
+//     suppresses the implicit trivial move constructor, leaving no trivial
+//     eligible constructor. It is therefore NOT an implicit-lifetime type
+//     (verified against clang's __builtin_is_implicit_lifetime, which reports
+//     0 for this exact shape) — field-writing its raw storage would be UB.
+//     Yet it IS trivially destructible and standard-layout, so it would pass
+//     the old gate. The new is_aggregate_v gate rejects it.
+//
+//   - `Order` (the pooled type) IS an aggregate, so it remains accepted.
+//
+// This is a negative test expressed via traits rather than a "fails to
+// compile" instantiation, because ObjectPool's constraint is a hard
+// static_assert (not SFINAE), so instantiating ObjectPool<NotImplicitLifetime>
+// could not be observed from within a compiling TU.
+namespace {
+// The user-provided copy constructor is intentionally NOT `= default`: a
+// user-provided copy ctor suppresses the implicit trivial move ctor, leaving
+// no trivial eligible constructor, which is exactly what makes this type NOT
+// implicit-lifetime while it stays trivially destructible. Defaulting it would
+// make it trivial again and destroy the counterexample, so clang-tidy's
+// "use = default" / special-member-functions suggestions are deliberately
+// suppressed here (justified false positive per the project NOLINT policy).
+// NOLINTBEGIN(modernize-use-equals-default,cppcoreguidelines-special-member-functions)
+struct NotImplicitLifetime {
+  int x{0};
+  NotImplicitLifetime(const NotImplicitLifetime &o) : x(o.x) {}
+};
+// NOLINTEND(modernize-use-equals-default,cppcoreguidelines-special-member-functions)
+static_assert(std::is_trivially_destructible_v<NotImplicitLifetime>,
+              "counterexample is trivially destructible — passes the old gate");
+static_assert(std::is_standard_layout_v<NotImplicitLifetime>,
+              "counterexample is standard-layout — passes the NodeType gate");
+static_assert(!std::is_aggregate_v<NotImplicitLifetime>,
+              "counterexample is NOT an aggregate — the new gate rejects it, "
+              "closing the implicit-lifetime hole");
+static_assert(std::is_aggregate_v<Order>,
+              "Order is an aggregate — the pool accepts it");
+} // namespace
 
 // ============================================================================
 // Test Fixture

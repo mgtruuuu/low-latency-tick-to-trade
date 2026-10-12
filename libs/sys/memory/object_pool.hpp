@@ -70,16 +70,28 @@ concept FreeListPolicy = requires(FL fl, typename FL::NodeType *node) {
  * - MmapRegion backing: huge pages (MAP_HUGETLB) with automatic fallback.
  * - Configurable prefault policy (default: kPopulateWrite for zero hot-path
  * faults).
- * @tparam T The type of object to pool. Must be trivially destructible
- *           and standard-layout. In practice, T should be an implicit-lifetime
- *           type (see [basic.types.general]: aggregate with non-user-provided
- *           destructor, or has trivial eligible ctor + trivial non-deleted
- *           dtor) so that object
- *           lifetime begins automatically on the backing storage (C++20
- *           P0593R6 for malloc/operator new; this codebase assumes mmap
- *           behaves equivalently on supported toolchains). allocate() returns raw
- *           storage — the caller writes fields directly (no placement-new
- *           needed for implicit-lifetime types).
+ * @tparam T The type of object to pool. Enforced (static_assert): T must be
+ *           an aggregate AND trivially destructible. These two checks lock the
+ *           two safety axes — construction and destruction:
+ *             - aggregate (+ trivial dtor below) => implicit-lifetime
+ *                                       ([basic.types.general]: an aggregate
+ *                                       whose destructor is not user-provided is
+ *                                       an implicit-lifetime class — aggregate
+ *                                       alone is NOT enough, since an aggregate
+ *                                       may still declare a user-provided
+ *                                       destructor), so allocate()'s raw storage
+ *                                       can be field-written without placement-
+ *                                       new (C++20 P0593R6 for malloc/operator
+ *                                       new; this codebase assumes mmap behaves
+ *                                       equivalently on supported toolchains).
+ *             - trivially destructible => the pool may reuse memory without
+ *                                       calling ~T, and completes the
+ *                                       implicit-lifetime condition above.
+ *           is_aggregate is a CONSERVATIVE C++20 stand-in for the C++23 trait
+ *           std::is_implicit_lifetime: sufficient but not necessary (it rejects
+ *           some valid implicit-lifetime non-aggregates). Pooled types are
+ *           simple PODs, so this costs nothing in practice. allocate() returns
+ *           raw storage — the caller writes fields directly (no placement-new).
  * @tparam FreeList The free-list policy. Must satisfy FreeListPolicy concept.
  *           Defaults to LockFreeStack<T> (MPMC, 128-bit CAS).
  *           Use SingleThreadStack<T> for single-threaded hot paths
@@ -87,10 +99,66 @@ concept FreeListPolicy = requires(FL fl, typename FL::NodeType *node) {
  */
 template <typename T, FreeListPolicy FreeList = LockFreeStack<T>>
 class ObjectPool {
+  // -- Destruction axis --
+  // The pool reuses raw memory without ever calling ~T (deallocate just
+  // returns the node to the free list). T must therefore be trivially
+  // destructible, or skipping ~T would leak/corrupt resources.
   static_assert(
       std::is_trivially_destructible_v<T>,
       "ObjectPool requires trivially destructible types "
       "(raw memory is returned without constructor/destructor calls)");
+
+  // -- Construction axis (independent of the destruction axis) --
+  // allocate() returns RAW storage (&node->data) and the contract is that the
+  // caller writes fields directly, with NO placement-new. That is only defined
+  // behavior when an object of type T is *implicitly* created in the storage so
+  // its lifetime begins without a constructor call ([intro.object],
+  // [basic.types.general]) — i.e. T must be an implicit-lifetime type.
+  //
+  // is_trivially_destructible (above) locks ONLY the destruction axis; it does
+  // NOT imply implicit-lifetime. The two axes are independent: a type with a
+  // user-provided copy constructor (which suppresses the implicit trivial move
+  // constructor) is trivially destructible yet NOT implicit-lifetime, so
+  // field-writing its raw storage would be UB. Without the gate below, such a
+  // type would compile silently. (Empirically verified against clang's
+  // __builtin_is_implicit_lifetime: `struct{int x; T(){} T(const T&){}}` is
+  // trivially destructible but implicit_lifetime == 0.)
+  //
+  // The precise trait std::is_implicit_lifetime is C++23. In C++20 we use
+  // is_aggregate_v as a conservative SUFFICIENT condition: every aggregate with
+  // a trivial (non-user-provided) destructor is an implicit-lifetime class
+  // ([basic.types.general]) — and the is_trivially_destructible_v gate above
+  // supplies exactly that destructor condition, so the two asserts together
+  // imply implicit-lifetime. is_aggregate is NOT necessary — it also rejects
+  // some valid implicit-lifetime non-aggregates (e.g. a struct whose only
+  // user-declared constructor is the default ctor keeps its trivial copy/move
+  // ctor and is still implicit-lifetime). Pooled types are simple PODs, so
+  // rejecting those exotic-but-valid types costs nothing in practice.
+  static_assert(
+      std::is_aggregate_v<T>,
+      "ObjectPool requires T to be an aggregate — a conservative C++20 "
+      "sufficient condition for implicit-lifetime. allocate() returns raw "
+      "storage that the caller field-initializes without placement-new, which "
+      "is only defined for implicit-lifetime types. See the comment above for "
+      "why is_trivially_destructible alone is insufficient.");
+
+  // NodeType (the free-list wrapper, { next; T data; }) is actually the FIRST
+  // type placed on the raw mmap storage: init_free_list() reinterprets the
+  // backing region as NodeType[] and push(&nodes[i]) field-writes node->next
+  // before any T is ever touched. So NodeType needs the SAME implicit-lifetime
+  // + trivially-destructible gate as T, for the same reason — otherwise a
+  // custom FreeList policy whose NodeType is standard-layout but NOT implicit-
+  // lifetime would reopen the UB on the wrapper. The built-in LockFreeStack /
+  // SingleThreadStack NodeTypes are aggregates (verified via
+  // __builtin_is_implicit_lifetime), so this is a forward-looking guard on the
+  // pluggable-policy contract.
+  static_assert(
+      std::is_aggregate_v<typename FreeList::NodeType> &&
+          std::is_trivially_destructible_v<typename FreeList::NodeType>,
+      "FreeList::NodeType must be an aggregate and trivially destructible "
+      "(implicit-lifetime), since the pool field-writes node->next on raw mmap "
+      "storage without placement-new — same contract as T above");
+
   static_assert(
       std::is_standard_layout_v<typename FreeList::NodeType>,
       "NodeType must be standard-layout for offsetof() in deallocate");
