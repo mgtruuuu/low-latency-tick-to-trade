@@ -340,18 +340,18 @@ The Strategy thread can also initiate shutdown autonomously by setting `g_stop` 
 
 All hot-path memory is allocated once at startup. Components receive non-owning `void*` pointers — they never allocate.
 
-### Why Not ObjectPool?
+### Why Not ConcurrentObjectPool?
 
-`ObjectPool<T>` bundles `MmapRegion` (allocation) + `FreeList` (slot management). The pipeline separates these concerns:
+`ConcurrentObjectPool<T>` bundles `MmapRegion` (allocation) + an internal `LockFreeStack` (slot management). The pipeline separates these concerns:
 
-| | ObjectPool | Pipeline approach |
+| | ConcurrentObjectPool | Pipeline approach |
 |---|---|---|
 | Allocation | Built-in MmapRegion | Centralized in `main.cpp` |
 | Slot management | LockFreeStack + Node wrapper | IndexFreeStack (no wrapper) |
 | Per-object overhead | sizeof(Node) wrapper | Zero |
-| Thread safety | Configurable | Single-threaded by design |
+| Thread safety | MPMC (128-bit CAS) | Single-threaded by design |
 
-`ObjectPool` is a reusable building block in `libs/` for concurrent producers/consumers. The pipeline's components are single-threaded and benefit from the lighter `IndexFreeStack`.
+`ConcurrentObjectPool` is a reusable building block in `libs/` for concurrent producers/consumers; `SingleThreadObjectPool<T>` is its zero-synchronization per-core sibling. The pipeline's components are single-threaded and build directly on the lighter `IndexFreeStack`.
 
 ### Buffer Layout
 

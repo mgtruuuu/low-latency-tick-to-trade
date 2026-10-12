@@ -11,7 +11,7 @@
  *   - iteration   — walk full list (cache-line traversal)
  *
  * All nodes are pre-allocated in a std::array — zero allocation during
- * measurement, matching the HFT hot-path pattern (ObjectPool + IntrusiveList).
+ * measurement, matching the HFT hot-path pattern (ConcurrentObjectPool + IntrusiveList).
  *
  * Usage:
  *   cmake --build build -j$(nproc)

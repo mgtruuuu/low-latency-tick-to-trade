@@ -1,13 +1,12 @@
 /**
  * @file single_thread_stack.hpp
- * @brief Single-threaded LIFO stack — zero-synchronization ObjectPool policy.
+ * @brief Single-threaded LIFO stack — zero-synchronization Treiber-layout
+ * stack.
  *
- * Drop-in replacement for LockFreeStack<T> when the pool is used by exactly
- * one thread (the common HFT hot-path case: thread-per-core architecture).
- *
- * Same Node layout as LockFreeStack<T>::Node — { Node* next; T data; } —
- * so ObjectPool::deallocate() pointer arithmetic (offsetof) works identically
- * regardless of which stack policy is used.
+ * The single-threaded counterpart to LockFreeStack<T>: the same intrusive
+ * Node layout — { Node* next; T data; } — but a plain pointer head instead of
+ * a 128-bit-CAS atomic. For the common HFT hot-path case where exactly one
+ * thread pushes and pops (thread-per-core / shared-nothing architecture).
  *
  * Why not just use LockFreeStack on a single thread?
  *   LockFreeStack uses 128-bit CMPXCHG16B for every push/pop. Even on a
@@ -16,10 +15,11 @@
  *     - CMPXCHG16B: ~20 cycles (implicit LOCK prefix, bus lock on some CPUs)
  *     - MOV (pointer store): ~1 cycle
  *   Additionally, LockFreeStack's cache-line-aligned atomic head wastes 48
- *   bytes of padding per stack instance. For per-core pools, this adds up.
+ *   bytes of padding per stack instance. For per-core data structures, this
+ *   adds up.
  *
  * Thread safety: NONE. Caller must ensure single-threaded access.
- * For concurrent pools, use LockFreeStack<T> (the ObjectPool default).
+ * For concurrent (MPMC) use, see LockFreeStack<T>.
  */
 
 #pragma once
@@ -28,10 +28,11 @@ namespace mk::sys::memory {
 
 template <typename T> class SingleThreadStack {
 public:
-  /// Same Node layout as LockFreeStack<T>::Node.
-  /// This is critical: ObjectPool::deallocate() uses offsetof(NodeType, data)
-  /// to recover the node pointer from a T*. Both stacks must use the same
-  /// layout so the offset is identical.
+  /// Same Node layout as LockFreeStack<T>::Node — { Node* next; T data; }.
+  /// An intrusive node carrying the user's T inline; recovering a T* from a
+  /// node (and vice versa) is a fixed offsetof(NodeType, data), identical to
+  /// LockFreeStack's — kept identical for direct conceptual comparison
+  /// (single-threaded store vs 128-bit CAS) and benchmarking.
   struct Node {
     Node *next;
     T data;

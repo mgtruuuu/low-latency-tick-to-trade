@@ -251,7 +251,7 @@ public:
   /// different address than before — invalidating any prior pointers.
   ///
   /// Useful for arena allocators that need to grow without re-allocating.
-  /// Not suitable for ObjectPool (fixed-size by design).
+  /// Not suitable for ConcurrentObjectPool (fixed-size by design).
   ///
   /// @param new_size New size in bytes. Must be > 0.
   /// @return true on success (addr_ and size_ updated), false on failure.
@@ -279,7 +279,7 @@ public:
   // Different scenarios require fundamentally different syscall sequences.
   // Named factories document intent and prevent flag-composition mistakes.
   // The abort policy belongs in the caller, not here — so we return
-  // std::optional and let callers like ObjectPool abort if needed.
+  // std::optional and let callers like ConcurrentObjectPool abort if needed.
   //
   // errno preservation: all factory error paths save errno before signal_log
   // and restore it afterward, so callers can inspect errno after nullopt.

@@ -3,7 +3,7 @@
  * @brief Convenience allocation helpers built on MmapRegion.
  *
  * Encapsulates startup mapping policy used throughout the codebase
- * (OrderBook, ObjectPool, pipeline launcher):
+ * (OrderBook, ConcurrentObjectPool, pipeline launcher):
  *   1. Choose mapping path by PageMappingMode
  *      (explicit huge pages + THP fallback, THP-only, or regular pages).
  *   2. Optionally NUMA-bind + prefault + lock in order-sensitive sequence.
@@ -56,7 +56,7 @@ enum class RegionIntent : std::uint8_t {
 };
 
 /// Map PrefaultPolicy to the corresponding RegionIntent.
-/// Centralizes the policy→intent mapping used by Arena and ObjectPool
+/// Centralizes the policy→intent mapping used by Arena and ConcurrentObjectPool
 /// convenience constructors. Manual prefault policies degrade to their
 /// non-manual equivalents (kManualWrite → kHotRw, kManualRead → kReadMostly).
 [[nodiscard]] constexpr RegionIntent

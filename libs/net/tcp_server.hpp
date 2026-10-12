@@ -752,7 +752,7 @@ public:
   /// @param framer  Framing strategy (default: LengthPrefixFramer).
   ///
   /// Aborts if buf is null, misaligned, or too small. This is a startup-time
-  /// call — failure is unrecoverable (same pattern as ObjectPool, HashMap).
+  /// call — failure is unrecoverable (same pattern as ConcurrentObjectPool, HashMap).
   explicit TcpServer(Handler &handler, TcpServerConfig config, void *buf,
                      std::size_t buf_size, FramerT framer = {}) noexcept
       : handler_(handler), config_(config), framer_(framer) {

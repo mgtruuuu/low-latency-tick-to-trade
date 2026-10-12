@@ -46,17 +46,18 @@ namespace mk::sys::memory {
  * - Pros: Decouples 'T' from the stack logic. Works with any type (int,
  * struct, etc.).
  * - Cons: Requires a wrapper 'Node'. When used in an Object Pool, converting
- * T* back to Node* requires pointer arithmetic (reinterpret_cast - offsetof).
+ *         T* back to Node* requires pointer arithmetic (reinterpret_cast -
+ *         offsetof).
  *
  * Future Optimization: Intrusive Design (HFT Preferred)
  * ----------------------------------------------------
  * Embed the 'next' pointer directly inside 'T' (e.g., T inherits from a Hook).
  * Memory Layout: [ T { Node* next; ... members ... } ]
  * - Pros: Zero wrapper overhead. The object IS the node.
- * Simplifies pointer handling (no offset calculations needed).
- * Slightly better cache locality (fewer indirections).
+ *         Simplifies pointer handling (no offset calculations needed).
+ *         Slightly better cache locality (fewer indirections).
  * - Cons: 'T' must be modified to contain the link pointer.
- * Implementation is more complex (requires template constraints).
+ *         Implementation is more complex (requires template constraints).
  *
  * Decision:
  * We use the Wrapper style for now to keep the implementation simple and
@@ -69,7 +70,7 @@ public:
   /**
    * @struct Node
    * @brief The container for the user data.
-   * Defined as 'public' so the ObjectPool can allocate a contiguous
+   * Defined as 'public' so the ConcurrentObjectPool can allocate a contiguous
    * block of these nodes. We do NOT align this struct individually
    * to keep the memory footprint small (dense packing).
    */
@@ -139,7 +140,7 @@ public:
    * @brief Pushes a node onto the stack.
    * This operation is lock-free and thread-safe.
    * @param node A pointer to the node to be pushed.
-   * The caller (ObjectPool) owns the memory of this node.
+   * The caller (ConcurrentObjectPool) owns the memory of this node.
    */
   void push(Node *node) noexcept {
     TaggedPtr old_head = head_.load(std::memory_order_relaxed);
