@@ -84,17 +84,13 @@ enum class ConnectionEvent : std::uint8_t {
 ///   At 4096 queue capacity: 4096 * 128 = 512KB per queue — fits in L2 cache.
 struct LogEntry {
   // -- Header (16 bytes) --
-  std::uint64_t tsc_timestamp{0}; // rdtsc() at log site
-  std::uint16_t thread_id{0};     // Logical thread ID (see kThreadId* below)
-  LogLevel level{LogLevel::kInfo};
-  LogEventType event_type{LogEventType::kText}; // Union discriminator
-  std::uint8_t pad_[4]{}; // Align payload to 16-byte boundary
+  std::uint64_t tsc_timestamp; // rdtsc() at log site
+  std::uint16_t thread_id;     // Logical thread ID (see kThreadId* below)
+  LogLevel level;
+  LogEventType event_type; // Union discriminator
+  std::uint8_t pad_[4];    // Align payload to 16-byte boundary
 
   // -- Payload (112 bytes) — tagged union --
-  // C++ rule: a union may have at most ONE member with a default member
-  // initializer. `latency{}` is that member — its `{}` zero-initializes
-  // the entire 112-byte union storage, so all other members start zeroed
-  // regardless of which event_type is active.
   union {
     // kLatency: pipeline stage timing
     struct {
@@ -102,7 +98,7 @@ struct LogEntry {
       std::uint8_t reserved[7];
       std::uint64_t cycles;   // Elapsed TSC cycles for this stage
       std::uint64_t recv_tsc; // UDP recv timestamp (for tick-to-trade)
-    } latency{}; // 24 bytes used — default init zeroes entire union
+    } latency;
 
     // kOrder: order lifecycle event
     struct {
@@ -116,7 +112,7 @@ struct LogEntry {
       std::uint32_t qty;
       std::uint32_t remaining_qty;
       std::int64_t send_ts; // monotonic_nanos at order send
-    } order;                // 48 bytes used
+    } order;
 
     // kMarketData: market data event
     struct {
@@ -127,7 +123,7 @@ struct LogEntry {
       std::int64_t price;
       std::uint32_t qty;
       std::uint32_t gap_size; // Non-zero if gap detected
-    } market_data;            // 32 bytes used
+    } market_data;
 
     // kConnection: TCP connection lifecycle
     struct {
@@ -135,12 +131,12 @@ struct LogEntry {
       std::uint8_t reserved[3];
       std::uint32_t attempt; // Reconnect attempt number
       std::int64_t rtt_ns;   // Heartbeat RTT in nanoseconds
-    } connection;            // 16 bytes used
+    } connection;
 
     // kText: generic text message (cold-path diagnostic)
     struct {
       char msg[112]; // Null-terminated, truncated at 111 chars
-    } text;          // 112 bytes used
+    } text;
   };
 };
 
