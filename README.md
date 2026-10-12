@@ -45,7 +45,8 @@ Median (p50) from rdtsc microbenchmarks (`bench/`, Release build, pinned to isol
 
 | Component | Description | Median (p50) | p99 |
 |-----------|-------------|-------------|-----|
-| `ObjectPool<T>` | Fixed-size pool, pluggable free-list | 2.5ns (SingleThread alloc) / 25.8ns (LockFree alloc) | 4.2ns / 30.8ns |
+| `ConcurrentObjectPool<T>` | Fixed-size MPMC pool, internal lock-free stack | 25.8ns alloc | 30.8ns |
+| `SingleThreadObjectPool<T>` | Fixed-size per-core pool, index free-list | 2.5ns alloc | 4.2ns |
 | `SPSCQueue<T>` | Lock-free SPSC ring buffer, monotonic indices | 3.3ns push+pop | 5.0ns |
 | `LockFreeStack<T>` | Treiber stack, 128-bit CAS (CMPXCHG16B), ABA-safe | 47.5ns push+pop | 51.7ns |
 | `OrderBook` | Price-time priority, intrusive lists, zero allocation | 46.7ns add_order (new level) | 110ns |
@@ -68,7 +69,7 @@ Cold-path components (not benchmarked — cost is irrelevant to trading latency)
 
 ```
 libs/                 Reusable low-latency components
-  sys/memory/         MmapRegion, ObjectPool, SPSC queues, lock-free stack
+  sys/memory/         MmapRegion, object pools (concurrent + single-thread), SPSC queues, lock-free stack
   sys/log/            Signal-safe logger, async logger (per-producer SPSC)
   sys/thread/         CPU affinity, hot-path allocation guard
   sys/                NanoClock (RDTSC), endian utils, bit utils
