@@ -4,9 +4,9 @@
  *
  * Arena — Single-block bump-pointer allocator. Two construction modes:
  *   - Non-owning: caller provides external buffer (stack, shared memory).
- *   - Owning: Arena allocates its own MmapRegion (ObjectPool pattern).
- *     Two-level huge page fallback: MAP_HUGETLB → anonymous + MADV_HUGEPAGE.
- *     Configurable PrefaultPolicy, NUMA binding, page locking.
+ *   - Owning: Arena allocates its own MmapRegion (ConcurrentObjectPool
+ *     pattern). Two-level huge page fallback: MAP_HUGETLB → anonymous +
+ *     MADV_HUGEPAGE. Configurable PrefaultPolicy, NUMA binding, page locking.
  *
  * HFT memory pattern: all memory is pre-allocated at startup. Arena never
  * grows at runtime — alloc() returns nullptr on OOM (caller decides policy).
@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <cstdint> // std::uintptr_t (integer-domain bounds check in alloc)
 #include <cstdlib> // std::abort (ArenaAllocator OOM)
 #include <limits>
 #include <span>
@@ -42,7 +43,7 @@ namespace mk::sys::memory {
 // model: each thread owns its own Arena, pinned to a dedicated core.
 // For cross-thread sharing, protect externally or use separate arenas.
 //
-// Two construction modes (ObjectPool pattern):
+// Two construction modes (ConcurrentObjectPool pattern):
 //   (1) Non-owning: external buffer via std::span<std::byte>.
 //       For stack-allocated buffers (per-message parsing), shared memory, etc.
 //   (2) Owning: Arena allocates its own MmapRegion.
@@ -73,7 +74,7 @@ public:
   // (2a) Owning — convenience constructor with two-level huge page fallback.
   // Aborts on mmap failure (unrecoverable, startup-time use).
   //
-  // Allocation strategy (cold path, same as ObjectPool):
+  // Allocation strategy (cold path, same as ConcurrentObjectPool):
   //   1. Try MmapRegion::allocate_huge_pages(MAP_HUGETLB) — explicit 2MB pages.
   //   2. Fall back to MmapRegion::allocate_anonymous() + MADV_HUGEPAGE hint.
   //   3. Abort if both fail.
@@ -168,18 +169,24 @@ public:
     assert(mk::sys::is_power_of_two(alignment));
 
     // 3. Align the bump pointer up to the requested boundary.
+    //    align_ptr_up can overshoot one-past-the-end on a near-full small buffer,
+    //    so we validate the aligned address in the integer (uintptr_t) domain
+    //    before doing any pointer subtraction, comparison, dereference, or bump
+    //    with p. Pointer subtraction is only well-defined while both operands stay
+    //    within [base_, end_] ([expr.add]p5); the old `end_ - p` was UB once an
+    //    overshoot put p past one-past-the-end — the integer check avoids that.
     auto *p = mk::sys::align_ptr_up(cur_, alignment);
+    const auto p_addr = reinterpret_cast<std::uintptr_t>(p);
+    const auto end_addr = reinterpret_cast<std::uintptr_t>(end_);
 
-    // 4. Boundary Check (OOM)
-    //    Use subtraction (end_ - p) instead of addition (p + bytes) to avoid
-    //    pointer arithmetic UB when bytes is larger than the remaining space.
-    //    Subtraction between two pointers within the same allocation is always
-    //    well-defined; addition past one-past-the-end is not.
-    if (std::cmp_greater(bytes, end_ - p)) {
+    // 4. Boundary check (OOM) in integer space:
+    //    - p_addr > end_addr        → alignment overshot the buffer
+    //    - bytes > end_addr - p_addr → request doesn't fit in what's left
+    if (p_addr > end_addr || bytes > end_addr - p_addr) {
       return nullptr;
     }
 
-    // 5. Bump the pointer
+    // 5. Bump the pointer (p_addr + bytes <= end_addr, so cur_ stays <= end_).
     cur_ = p + bytes;
     return p;
   }
