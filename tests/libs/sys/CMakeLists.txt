@@ -10,6 +10,7 @@ mk_add_gtest(intrusive_lock_free_stack_test memory/intrusive_lock_free_stack_tes
 mk_add_gtest(single_thread_stack_test    memory/single_thread_stack_test.cpp     mk_sys)
 mk_add_gtest(mmap_region_test            memory/mmap_region_test.cpp             mk_sys)
 mk_add_gtest(object_pool_test            memory/object_pool_test.cpp             mk_sys)
+mk_add_gtest(single_thread_object_pool_test memory/single_thread_object_pool_test.cpp mk_sys)
 mk_add_gtest(aligned_new_allocator_test  memory/aligned_new_allocator_test.cpp   mk_sys)
 mk_add_gtest(aligned_array_deleter_test memory/aligned_array_deleter_test.cpp  mk_sys)
 mk_add_gtest(spsc_queue_test             memory/spsc_queue_test.cpp              mk_sys)
