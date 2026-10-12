@@ -1,10 +1,15 @@
 /**
  * @file object_pool_bench.cpp
- * @brief Microbenchmark for ObjectPool allocate/deallocate operations.
+ * @brief Microbenchmark for object-pool allocate/deallocate operations.
  *
- * Compares two free-list policies:
- *   - LockFreeStack<T>    (default) — MPMC, 128-bit CAS (~20 cycles per op)
- *   - SingleThreadStack<T>          — zero synchronization (~1 cycle per op)
+ * Compares three pool variants, all single-threaded:
+ *   - ObjectPool<T, LockFreeStack<T>>    (default) — MPMC, 128-bit CAS
+ *                                          (~20 cycles per op)
+ *   - ObjectPool<T, SingleThreadStack<T>>          — zero synchronization,
+ *                                          wrapper Node + offsetof
+ *   - SingleThreadObjectPool<T>                    — zero synchronization,
+ *                                          separate uint32_t index free list
+ *                                          (no wrapper pointer, no offsetof)
  *
  * Single-threaded: measures raw operation cost, not concurrent throughput.
  * This is the relevant metric for per-core hot-path pools.
@@ -19,6 +24,7 @@
 
 #include "bench_utils.hpp"
 #include "sys/memory/object_pool.hpp"
+#include "sys/memory/single_thread_object_pool.hpp"
 #include "sys/memory/single_thread_stack.hpp"
 #include "sys/nano_clock.hpp"
 
@@ -165,11 +171,26 @@ int main() {
 
   std::printf("\n");
 
-  // --- SingleThreadStack policy (zero sync) ---
-  std::printf("Policy: SingleThreadStack (zero sync)\n");
+  // --- SingleThreadStack policy (zero sync, wrapper-Node free list) ---
+  std::printf("Policy: SingleThreadStack (zero sync, wrapper Node + offsetof)\n");
   print_header();
   {
     ObjectPool<Payload, SingleThreadStack<Payload>> pool(kPoolCapacity);
+    bench_allocate(pool, cal, "allocate");
+    bench_deallocate(pool, cal, "deallocate");
+    bench_round_trip(pool, cal, "alloc + dealloc round-trip");
+  }
+
+  std::printf("\n");
+
+  // --- SingleThreadObjectPool (zero sync, separate index free list) ---
+  // The other single-thread point of comparison: same zero-synchronization,
+  // but a separate uint32_t index free list (no per-slot wrapper pointer, no
+  // offsetof — deallocate is pointer-to-index arithmetic).
+  std::printf("Pool:   SingleThreadObjectPool (zero sync, index free list)\n");
+  print_header();
+  {
+    SingleThreadObjectPool<Payload> pool(kPoolCapacity);
     bench_allocate(pool, cal, "allocate");
     bench_deallocate(pool, cal, "deallocate");
     bench_round_trip(pool, cal, "alloc + dealloc round-trip");

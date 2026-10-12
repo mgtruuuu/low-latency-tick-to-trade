@@ -325,4 +325,13 @@ private:
   MmapRegion memory_block_;
 };
 
+/// Concurrent (MPMC) object pool — an alias for the default ObjectPool policy
+/// (LockFreeStack, 128-bit CAS), named for symmetry with SingleThreadObjectPool
+/// (single_thread_object_pool.hpp). Use this when allocate() and deallocate()
+/// may run on different threads; use SingleThreadObjectPool for per-core /
+/// thread-per-core hot paths (no synchronization). This is a naming convenience
+/// only — it adds no behavior over ObjectPool<T, LockFreeStack<T>>.
+template <typename T>
+using ConcurrentObjectPool = ObjectPool<T, LockFreeStack<T>>;
+
 } // namespace mk::sys::memory

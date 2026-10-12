@@ -100,6 +100,14 @@ static_assert(!std::is_aggregate_v<NotImplicitLifetime>,
               "closing the implicit-lifetime hole");
 static_assert(std::is_aggregate_v<Order>,
               "Order is an aggregate — the pool accepts it");
+
+// ConcurrentObjectPool<T> is a naming-only alias for the default ObjectPool
+// policy (LockFreeStack), the symmetric counterpart to SingleThreadObjectPool.
+static_assert(
+    std::is_same_v<mk::sys::memory::ConcurrentObjectPool<Order>,
+                   mk::sys::memory::ObjectPool<
+                       Order, mk::sys::memory::LockFreeStack<Order>>>,
+    "ConcurrentObjectPool<T> must alias ObjectPool<T, LockFreeStack<T>>");
 } // namespace
 
 // ============================================================================
